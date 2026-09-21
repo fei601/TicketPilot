@@ -458,9 +458,14 @@ if page == "💬 智能对话":
                             reply = final.get("content", "查询完成")
 
                     elif intent == IntentType.KNOWLEDGE_QA:
+                        # retriever 无结果时返回空串，给出明确降级指令防止编造
                         context = retrieve_from_knowledge(user_input)
+                        if context:
+                            kb_hint = f"\n\n参考知识库：\n{context}"
+                        else:
+                            kb_hint = "\n\n知识库未检索到相关内容。请直接告知用户知识库暂无相关信息，不要编造。"
                         messages = [
-                            {"role": "system", "content": prompts.SYSTEM_PROMPT + f"\n\n参考知识库：\n{context}"},
+                            {"role": "system", "content": prompts.SYSTEM_PROMPT + kb_hint},
                             {"role": "user", "content": user_input},
                         ]
                         response = llm.chat(messages)

@@ -37,8 +37,8 @@ def search_knowledge(query: str) -> str:
     # 检索知识库
     result = retrieve_from_knowledge(query, top_k=3)
 
-    # 判断是否有结果
-    if "未在知识库中找到" in result:
+    # 判断是否有结果（retriever 无结果时返回空串）
+    if not result:
         return json.dumps({
             "found": False,
             "message": f"抱歉，知识库暂无「{query}」的相关信息，目前功能还在完善中。",

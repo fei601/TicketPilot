@@ -1,10 +1,8 @@
 """
 RAG 检索模块
 
-提供基于向量相似度的知识库检索功能。
-支持两种模式：
-1. ChromaDB 向量检索（需要初始化）
-2. 关键词检索（降级方案，无需额外依赖）
+基于关键词匹配的知识库检索（无向量数据库依赖）。
+知识库文档来自 knowledge_base/*.md，由 loader 按 "##" 小节切分。
 """
 
 from ticketpilot.rag.loader import load_knowledge_docs
@@ -93,13 +91,14 @@ def retrieve_from_knowledge(query: str, top_k: int = 3) -> str:
         top_k: 返回结果数量
 
     Returns:
-        拼接后的相关文档内容
+        拼接后的相关文档内容；无结果时返回空字符串 ""
+        （调用方以"是否为空"判断，不依赖特定文案）
     """
     retriever = get_retriever()
     results = retriever.retrieve(query, top_k)
 
     if not results:
-        return "未在知识库中找到相关信息。"
+        return ""
 
     parts = []
     for i, doc in enumerate(results, 1):
