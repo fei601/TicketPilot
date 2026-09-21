@@ -87,6 +87,10 @@ def _is_order_content(text: str) -> bool:
     if len(name_number_pattern) >= 2:
         return True
 
+    # 特征4: 票务特征词（连坐/连座/全平台）+ 票价数字（如"周杰伦580连座"）
+    if re.search(r'连[坐座]|全平台', text) and re.search(r'\d{3,4}', text):
+        return True
+
     return False
 
 
@@ -111,7 +115,7 @@ def classify_intent_simple(user_input: str) -> IntentType:
         return IntentType.ORDER_PARSE
 
     # 1.5 订单管理操作（删除/修改等，优先级高于艺人匹配）
-    manage_keywords = ["中了", "没中", "撤单", "退款", "延顺", "订单状态",
+    manage_keywords = ["中了", "没中", "撤单", "退款", "延顺", "订单状态", "等待二开",
                        "查看订单", "我的订单", "订单列表", "更新状态", "标记中票", "标记未中",
                        "删除", "删掉", "删了", "移除", "去掉", "取消订单", "撤掉",
                        "修改", "更改", "改成", "改为", "加上", "增加", "添加", "补充", "更新订单",
