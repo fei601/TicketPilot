@@ -7,6 +7,7 @@
 import json
 
 from ticketpilot.core import llm, prompts
+from ticketpilot.data.constants import CITIES
 from ticketpilot.data.database import Database
 from ticketpilot.data.models import Order, OrderStatus
 
@@ -72,10 +73,8 @@ class OrderManager:
         """
         import re
 
-        # 城市列表用于检测新订单
-        cities = ["上海", "南京", "北京", "广州", "深圳", "成都", "重庆", "杭州", "武汉", "西安",
-                  "长沙", "青岛", "天津", "苏州", "郑州", "济南", "合肥", "昆明", "大连", "厦门",
-                  "哈尔滨", "沈阳", "长春", "福州", "南宁", "贵阳"]
+        # 城市列表用于检测新订单（统一用 constants.CITIES，与拆单/艺人剥离同源）
+        cities = CITIES
 
         # 按换行符拆分（用户通常每行一个订单）
         lines = text.strip().split('\n')
