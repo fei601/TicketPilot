@@ -14,11 +14,12 @@
 import hashlib
 import json
 import logging
-import os
 import time
 from abc import ABC, abstractmethod
 
 import requests
+
+import config
 
 # 配置日志
 logger = logging.getLogger(__name__)
@@ -343,7 +344,8 @@ class WebSearchDataSource(DataSource):
     TAVILY_API_URL = "https://api.tavily.com/search"
 
     def __init__(self, api_key: str | None = None):
-        self.api_key = api_key or os.getenv("TAVILY_API_KEY", "")
+        # 显式传 "" 表示"就是没有 key"（测试依赖此语义），不能回落环境变量
+        self.api_key = api_key if api_key is not None else config.TAVILY_API_KEY
 
     def get_name(self) -> str:
         return "web"

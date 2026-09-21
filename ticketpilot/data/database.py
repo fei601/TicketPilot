@@ -8,13 +8,16 @@ import sqlite3
 from datetime import datetime
 from pathlib import Path
 
+import config
 from ticketpilot.data.models import Order, OrderStatus
 
 
 class Database:
     """SQLite 数据库管理"""
 
-    def __init__(self, db_path: str | Path = "data/ticketpilot.db"):
+    def __init__(self, db_path: str | Path | None = None):
+        # 默认路径锚定项目根目录（config.BASE_DIR），与启动时 CWD 无关
+        db_path = db_path if db_path is not None else config.DATABASE_PATH
         self.db_path = Path(db_path)
         self._is_memory = str(db_path) == ":memory:"
         self._conn = None

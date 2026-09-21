@@ -23,6 +23,12 @@ LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://api.deepseek.com")
 LLM_MODEL = os.getenv("LLM_MODEL", "deepseek-chat")
 
 # ===========================================
+# 数据库配置
+# ===========================================
+# 锚定到项目根目录，避免从 frontend/ 等子目录启动时建出空库
+DATABASE_PATH = BASE_DIR / "data" / "ticketpilot.db"
+
+# ===========================================
 # RAG 配置
 # ===========================================
 KNOWLEDGE_BASE_DIR = BASE_DIR / "ticketpilot" / "knowledge_base"
