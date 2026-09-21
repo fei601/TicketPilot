@@ -39,7 +39,10 @@ class OrderManager:
         try:
             from ticketpilot.core.utils import extract_json
             data = extract_json(content)
-            if data:
+            if isinstance(data, list) and data:
+                # LLM 偶尔输出 [{...}] 而非单对象，取第一个元素
+                data = data[0]
+            if isinstance(data, dict):
                 return Order(**data)
             else:
                 # 解析失败时返回一个基础订单

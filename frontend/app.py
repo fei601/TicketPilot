@@ -587,7 +587,7 @@ if page == "💬 智能对话":
                                     from ticketpilot.core.utils import extract_json
                                     extract_content = extract_response.get("content", "").strip()
                                     extract_result = extract_json(extract_content)
-                                    if extract_result:
+                                    if isinstance(extract_result, dict):
                                         search_terms = extract_result.get("keywords", [])
                                     else:
                                         search_terms = []
@@ -670,7 +670,7 @@ if page == "💬 智能对话":
                                 from ticketpilot.core.utils import extract_json
                                 extract_content = extract_response.get("content", "").strip()
                                 extract_result = extract_json(extract_content)
-                                if extract_result:
+                                if isinstance(extract_result, dict):
                                     search_terms = extract_result.get("keywords", [])
                                     query_type = extract_result.get("query_type", "specific")
                                 else:

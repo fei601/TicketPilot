@@ -11,46 +11,54 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-def extract_json(text: str) -> dict | None:
+def extract_json(text: str) -> dict | list | None:
     """
-    从文本中提取 JSON 对象。
+    从文本中提取 JSON 对象或数组。
 
     支持以下格式：
-    1. Markdown 代码块中的 JSON: ```json {...}```
-    2. 裸 JSON 对象: {...}
+    1. Markdown 代码块中的 JSON: ```json {...}``` 或 ```json [...]```
+    2. 裸 JSON: {...} 或 [...]
 
     Args:
         text: 包含 JSON 的文本
 
     Returns:
-        解析后的 dict，或 None（如果提取失败）
+        解析后的 dict 或 list，或 None（如果提取失败）。
+        调用方应使用 isinstance 判断类型后再取字段。
     """
     if not text:
         return None
 
     text = text.strip()
 
-    # 尝试1: 从代码块中提取
-    code_block_match = re.search(r'```(?:json)?\s*(\{[\s\S]*?\})\s*```', text)
+    # 尝试1: 从代码块中提取（对象或数组）
+    code_block_match = re.search(r'```(?:json)?\s*(\{[\s\S]*?\}|\[[\s\S]*?\])\s*```', text)
     if code_block_match:
         try:
             return json.loads(code_block_match.group(1))
         except json.JSONDecodeError as e:
             logger.warning(f"代码块中的JSON解析失败: {e}")
 
-    # 尝试2: 提取裸 JSON（找到最外层的 {}）
-    try:
-        start = text.index("{")
-        # 找到匹配的右括号
-        depth = 0
-        for i in range(start, len(text)):
-            if text[i] == "{":
-                depth += 1
-            elif text[i] == "}":
-                depth -= 1
-                if depth == 0:
-                    return json.loads(text[start:i + 1])
-    except (ValueError, json.JSONDecodeError) as e:
-        logger.warning(f"裸JSON解析失败: {e}")
+    # 尝试2: 提取裸 JSON（找到最外层括号，{ 和 [ 取先出现者）
+    candidates = []
+    for open_ch, close_ch in (("{", "}"), ("[", "]")):
+        pos = text.find(open_ch)
+        if pos != -1:
+            candidates.append((pos, open_ch, close_ch))
+
+    if candidates:
+        start, open_ch, close_ch = min(candidates, key=lambda c: c[0])
+        try:
+            # 找到匹配的右括号（只计数同类型括号，嵌套同类括号也能配平）
+            depth = 0
+            for i in range(start, len(text)):
+                if text[i] == open_ch:
+                    depth += 1
+                elif text[i] == close_ch:
+                    depth -= 1
+                    if depth == 0:
+                        return json.loads(text[start:i + 1])
+        except (ValueError, json.JSONDecodeError) as e:
+            logger.warning(f"裸JSON解析失败: {e}")
 
     return None

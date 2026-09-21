@@ -259,7 +259,7 @@ def classify_intent_with_llm(user_input: str, context: str = "") -> IntentType:
         # 提取 JSON
         from ticketpilot.core.utils import extract_json
         result = extract_json(content)
-        if result:
+        if isinstance(result, dict):
             intent_str = result.get("intent", "GENERAL")
 
             # 映射到 IntentType
