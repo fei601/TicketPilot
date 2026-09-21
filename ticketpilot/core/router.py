@@ -150,6 +150,52 @@ def classify_intent_simple(user_input: str) -> IntentType:
     return IntentType.GENERAL
 
 
+# ===========================================
+# ORDER_MANAGE 子分类（删除/修改/查询/汇总）
+# 从 frontend/app.py 迁入，纯关键词规则
+# ===========================================
+
+DELETE_KEYWORDS = ["删除", "删掉", "删了", "移除", "去掉", "撤掉"]
+EDIT_KEYWORDS = ["修改", "更改", "更新", "改成", "改为", "加上", "增加", "添加", "补充",
+                 "加一个", "加个", "前面加", "后面加", "换成"]
+QUERY_KEYWORDS = ["有", "有没有", "查", "查询", "找", "单子", "订单状态"]
+
+
+def classify_order_action(user_input: str) -> str:
+    """
+    ORDER_MANAGE 意图的子分类。
+
+    规则（与原 Streamlit 聊天页行为一致）：
+    1. delete 优先：命中删除词即删除（与编辑词同现时删除优先）
+    2. query 次之：命中查询词且未命中删除/编辑词
+    3. edit 再次：命中编辑词
+    4. "把…订单/单子"句式无明确动作词时默认按删除处理
+    5. 都不命中 → summary（订单状态汇总表）
+
+    Args:
+        user_input: 用户输入文本
+
+    Returns:
+        "delete" | "edit" | "query" | "summary"
+    """
+    is_delete = any(kw in user_input for kw in DELETE_KEYWORDS)
+    is_edit = any(kw in user_input for kw in EDIT_KEYWORDS)
+    is_query = any(kw in user_input for kw in QUERY_KEYWORDS) and not is_delete and not is_edit
+
+    # "把...的订单/单子"模式：无明确动作词时默认当作删除
+    if not is_delete and not is_edit:
+        if "把" in user_input and ("订单" in user_input or "单子" in user_input):
+            is_delete = True
+
+    if is_delete:
+        return "delete"
+    if is_query:
+        return "query"
+    if is_edit:
+        return "edit"
+    return "summary"
+
+
 # LLM 意图分类提示词
 INTENT_CLASSIFY_PROMPT = """你是一个票务助手的意图分类器。根据用户输入，判断其意图类别。
 
