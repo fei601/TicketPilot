@@ -82,29 +82,25 @@ class BroadcastScheduler:
         """
         用户转发公众号内容后，处理播报。
 
+        解析/入库/报告逻辑委托 BroadcastManager.process_forwarded_content
+        （与 Streamlit 播报解析页共享同一实现）；推送只留在 scheduler，
+        避免 UI 页每次解析都推企业微信群。
+
         Args:
             content: 公众号文章内容
 
         Returns:
             播报报告
         """
-        # 1. 解析公众号内容
-        from ticketpilot.tools.wechat_parser import parse_broadcast_content
-        events = parse_broadcast_content(content)
+        result = self.manager.process_forwarded_content(content)
 
-        if not events or (len(events) == 1 and "error" in events[0]):
-            return "❌ 解析失败，请确认转发的是票务类公众号内容"
+        if not result["success"]:
+            return f"❌ {result['error']}"
 
-        # 2. 保存到数据库
-        self.manager.broadcast_db.save_events(events)
+        # 推送播报
+        self.notifier.send_markdown(result["report"]["summary"])
 
-        # 3. 生成播报报告
-        report = self.manager.generate_evening_report()
-
-        # 4. 推送播报
-        self.notifier.send_markdown(report["summary"])
-
-        return report["summary"]
+        return result["report"]["summary"]
 
     def _morning_check(self):
         """

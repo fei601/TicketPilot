@@ -66,6 +66,31 @@ class BroadcastManager:
 
         return matched
 
+    def process_forwarded_content(self, content: str) -> dict:
+        """
+        处理转发的公众号内容：解析 → 入库 → 生成晚间播报报告。
+
+        只负责处理，不负责推送——推送由调用方决定（scheduler 推企业微信群，
+        Streamlit 播报解析页只展示，避免每次解析都轰炸群）。
+
+        Args:
+            content: 公众号文章原文
+
+        Returns:
+            失败 {"success": False, "error": "..."}；
+            成功 {"success": True, "events": [...], "report": {...}}
+        """
+        from ticketpilot.tools.wechat_parser import parse_broadcast_content
+
+        events = parse_broadcast_content(content)
+
+        if not events or (len(events) == 1 and "error" in events[0]):
+            return {"success": False, "error": "解析失败，请确认转发的是票务类公众号内容"}
+
+        self.broadcast_db.save_events(events)
+        report = self.generate_evening_report()
+        return {"success": True, "events": events, "report": report}
+
     def generate_evening_report(self) -> dict:
         """
         生成晚间播报报告。

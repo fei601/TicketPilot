@@ -16,6 +16,7 @@ import streamlit as st
 
 from ticketpilot.application.chat_service import ChatService
 import ticketpilot.tools  # noqa: F401 — 触发全量工具注册（ChatService 工具循环需要全量注册表）
+from ticketpilot.agent.broadcast_manager import BroadcastManager
 from ticketpilot.agent.order_manager import OrderManager
 from ticketpilot.data.models import OrderStatus
 from ticketpilot.core.privacy import mask_phone, mask_pii_in_text
@@ -105,6 +106,10 @@ if "order_manager" not in st.session_state:
 if "chat_service" not in st.session_state:
     st.session_state.chat_service = ChatService(st.session_state.order_manager)
 
+# 播报管理器（播报解析页用；与调度器同一套解析→入库→报告逻辑）
+if "broadcast_manager" not in st.session_state:
+    st.session_state.broadcast_manager = BroadcastManager()
+
 if "order_format" not in st.session_state:
     st.session_state.order_format = user_config.get("order_format", "default")
 
@@ -122,7 +127,7 @@ with st.sidebar:
 
     page = st.radio(
         "选择功能",
-        ["💬 智能对话", "📋 订单管理", "📊 数据看板"],
+        ["💬 智能对话", "📋 订单管理", "📊 数据看板", "📢 播报解析"],
     )
 
     st.divider()
@@ -443,3 +448,29 @@ elif page == "📊 数据看板":
     col1.metric("已撤单", summary["cancelled"])
     col2.metric("已退款", summary["refunded"])
     col3.metric("等待二开", summary["waiting_second"])
+
+
+# ===========================================
+# 播报解析页面
+# ===========================================
+
+elif page == "📢 播报解析":
+    st.header("播报解析")
+    st.caption("粘贴转发的票小二公众号内容：解析入库并生成明日播报报告。"
+               "仅展示、不推送企业微信群（推送由调度器负责）。")
+
+    content = st.text_area(
+        "公众号内容",
+        height=300,
+        placeholder="在此粘贴公众号播报全文…",
+    )
+
+    if st.button("🔍 解析播报", type="primary", disabled=not content.strip()):
+        with st.spinner("解析中..."):
+            result = st.session_state.broadcast_manager.process_forwarded_content(content)
+
+        if result["success"]:
+            st.success(f"已解析并入库 {len(result['events'])} 条播报")
+            st.markdown(result["report"]["summary"])
+        else:
+            st.error(result["error"])
