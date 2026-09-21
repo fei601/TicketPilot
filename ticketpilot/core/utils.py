@@ -54,39 +54,3 @@ def extract_json(text: str) -> dict | None:
         logger.warning(f"裸JSON解析失败: {e}")
 
     return None
-
-
-def extract_number(text: str) -> int | None:
-    """
-    从文本中提取数字（支持中文数字）。
-
-    Args:
-        text: 包含数字的文本
-
-    Returns:
-        提取到的数字，或 None
-    """
-    # 中文数字映射
-    cn_to_num = {
-        '一': 1, '二': 2, '三': 3, '四': 4, '五': 5,
-        '六': 6, '七': 7, '八': 8, '九': 9, '十': 10,
-        '百': 100, '千': 1000, '万': 10000
-    }
-
-    # 尝试匹配阿拉伯数字
-    arabic_match = re.search(r'(\d+)', text)
-    if arabic_match:
-        return int(arabic_match.group(1))
-
-    # 尝试匹配中文数字
-    cn_match = re.search(r'([一二三四五六七八九十百千万]+)', text)
-    if cn_match:
-        cn_str = cn_match.group(1)
-        # 简单转换（只处理单个中文数字）
-        if len(cn_str) == 1 and cn_str in cn_to_num:
-            return cn_to_num[cn_str]
-        # 处理 "第十N" 等格式
-        if cn_str.startswith('十') and len(cn_str) == 2:
-            return 10 + cn_to_num.get(cn_str[1], 0)
-
-    return None

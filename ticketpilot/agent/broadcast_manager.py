@@ -8,7 +8,7 @@
 """
 
 import json
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from ticketpilot.core import llm
 from ticketpilot.data.broadcast_db import BroadcastDB
@@ -223,62 +223,3 @@ class BroadcastManager:
                 lines.append(f"  • {change['event']}：{change['note']}")
 
         return "\n".join(lines)
-
-    def get_upcoming_reminders(self) -> list[dict]:
-        """
-        获取即将开票的提醒（开票前 10 分钟）。
-
-        Returns:
-            需要提醒的演出列表
-        """
-        now = get_accurate_time()
-        today = now.strftime("%Y-%m-%d")
-
-        # 获取今天开票的播报
-        today_events = self.broadcast_db.get_events_by_date(today)
-
-        reminders = []
-        for event in today_events:
-            sale_time_str = event.get("sale_time")
-            if not sale_time_str:
-                continue
-
-            try:
-                # 解析开票时间
-                sale_datetime = datetime.strptime(f"{today} {sale_time_str}", "%Y-%m-%d %H:%M")
-                time_diff = (sale_datetime - now).total_seconds()
-
-                # 开票前 10 分钟内（600秒），且还未开票
-                if 0 < time_diff <= 600:
-                    # 检查是否有工单
-                    orders = self.get_orders_by_event(event["event_name"], event.get("city"))
-                    if orders:
-                        minutes_left = int(time_diff / 60)
-                        reminders.append({
-                            "event_name": event["event_name"],
-                            "city": event.get("city"),
-                            "sale_time": sale_time_str,
-                            "minutes_left": minutes_left,
-                            "orders": orders,
-                            "order_count": len(orders),
-                        })
-            except ValueError:
-                continue
-
-        return reminders
-
-    def format_reminder_message(self, reminder: dict) -> str:
-        """格式化开票提醒消息"""
-        orders_info = ", ".join([
-            f"{o['customer']}(×{o['quantity']})"
-            for o in reminder["orders"]
-        ])
-
-        return (
-            f"⏰ **开票提醒**\n\n"
-            f"🎤 {reminder['event_name']}\n"
-            f"📍 {reminder.get('city', '未知')}\n"
-            f"🕐 距离开票还有 {reminder['minutes_left']} 分钟\n"
-            f"👥 客户工单：{orders_info}\n\n"
-            f"请准备抢票！"
-        )

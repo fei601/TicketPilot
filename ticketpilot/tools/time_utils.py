@@ -11,8 +11,6 @@
 使用 NTP 服务器获取标准时间，避免系统时间不准导致误判。
 """
 
-import socket
-import struct
 import time
 from datetime import datetime, timedelta, timezone
 

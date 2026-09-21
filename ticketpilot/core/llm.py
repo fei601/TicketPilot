@@ -82,30 +82,3 @@ def chat(
         ]
 
     return result
-
-
-def chat_stream(
-    messages: list[dict],
-    model: str | None = None,
-    temperature: float = 0.7,
-    max_tokens: int = 2048,
-):
-    """
-    流式调用 LLM（用于前端实时显示）。
-
-    Yields:
-        每次生成的文本片段
-    """
-    client = get_llm_client()
-
-    stream = client.chat.completions.create(
-        model=model or config.LLM_MODEL,
-        messages=messages,
-        temperature=temperature,
-        max_tokens=max_tokens,
-        stream=True,
-    )
-
-    for chunk in stream:
-        if chunk.choices[0].delta.content:
-            yield chunk.choices[0].delta.content

@@ -8,10 +8,8 @@
 """
 
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
-
-from ticketpilot.data.models import BroadcastEvent
 
 
 class BroadcastDB:
@@ -126,27 +124,6 @@ class BroadcastDB:
         finally:
             self._close_conn(conn)
 
-    def get_tomorrow_events(self) -> list[dict]:
-        """获取明天开票的演出"""
-        tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
-        return self.get_events_by_date(tomorrow)
-
-    def get_today_events(self) -> list[dict]:
-        """获取今天开票的演出"""
-        today = datetime.now().strftime("%Y-%m-%d")
-        return self.get_events_by_date(today)
-
-    def get_pending_events(self) -> list[dict]:
-        """获取待处理的播报"""
-        conn = self._get_conn()
-        try:
-            rows = conn.execute(
-                "SELECT * FROM broadcasts WHERE status = 'pending' ORDER BY sale_date, sale_time"
-            ).fetchall()
-            return [dict(row) for row in rows]
-        finally:
-            self._close_conn(conn)
-
     def update_status(self, event_id: int, status: str) -> bool:
         """更新播报状态"""
         conn = self._get_conn()
@@ -157,19 +134,5 @@ class BroadcastDB:
             )
             conn.commit()
             return cursor.rowcount > 0
-        finally:
-            self._close_conn(conn)
-
-    def cleanup_old_events(self, days: int = 30):
-        """清理过期数据"""
-        cutoff = (datetime.now() - timedelta(days=days)).isoformat()
-        conn = self._get_conn()
-        try:
-            cursor = conn.execute(
-                "DELETE FROM broadcasts WHERE created_at < ?",
-                (cutoff,)
-            )
-            conn.commit()
-            return cursor.rowcount
         finally:
             self._close_conn(conn)

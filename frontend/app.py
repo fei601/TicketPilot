@@ -22,7 +22,7 @@ from ticketpilot.tools.base import execute_tool, get_all_tool_schemas
 from ticketpilot.tools import event_search, time_utils  # noqa: F401
 from ticketpilot.agent.order_manager import OrderManager
 from ticketpilot.data.models import OrderStatus
-from ticketpilot.core.privacy import mask_id_card, mask_phone, mask_pii_in_text
+from ticketpilot.core.privacy import mask_phone, mask_pii_in_text
 
 # 配置日志
 logger = logging.getLogger(__name__)

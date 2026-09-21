@@ -111,28 +111,3 @@ def mask_pii_in_text(text: str) -> str:
     )
 
     return text
-
-
-def get_masked_order_info(order, show_full: bool = False) -> dict:
-    """
-    获取订单的脱敏信息（用于 UI 显示）
-
-    Args:
-        order: 订单对象
-        show_full: 是否显示完整信息（用户主动查看时）
-
-    Returns:
-        脱敏后的订单信息字典
-    """
-    if show_full:
-        return {
-            "customer_name": order.customer_name or "未知",
-            "budget": order.budget or "未知",
-            "notes": order.notes or "",
-        }
-
-    return {
-        "customer_name": mask_name(order.customer_name),
-        "budget": mask_phone(order.budget) if order.budget and len(order.budget) == 11 else order.budget or "未知",
-        "notes": mask_pii_in_text(order.notes) if order.notes else "",
-    }
