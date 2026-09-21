@@ -4,8 +4,6 @@
 支持企业微信机器人 Webhook 推送。
 """
 
-import json
-
 import requests
 
 import config

@@ -307,14 +307,11 @@ def parse_multiple_orders(self, text: str) -> list[Order]:
 
 ```python
 # ticketpilot/core/privacy.py
-def mask_id_card(id_card: str) -> str:
-    """身份证号脱敏: 310101199901011234 → 310***********1234"""
-
 def mask_phone(phone: str) -> str:
     """手机号脱敏: 13812345678 → 138****5678"""
 
 def mask_pii_in_text(text: str) -> str:
-    """自动检测并脱敏文本中的所有 PII"""
+    """自动检测并脱敏文本中的所有 PII（身份证号/手机号）"""
 ```
 
 ---

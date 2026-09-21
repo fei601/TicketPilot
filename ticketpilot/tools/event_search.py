@@ -129,6 +129,8 @@ class DamaiDataSource(DataSource):
     APP_KEY = "12574478"
 
     # 城市 ID 映射（常用城市）
+    # TODO: 目前所有城市都映射到 852（全国兜底 ID），按城市筛选实际未生效；
+    #       需要抓取大麦真实城市 cityId 后逐个替换
     CITY_MAP = {
         "北京": "852",
         "上海": "852",
@@ -414,6 +416,10 @@ class DataSourceManager:
     def list_sources(self) -> list[str]:
         return list(self._sources.keys())
 
+    def get_source(self, name: str) -> DataSource | None:
+        """按名称获取已注册的数据源实例（复用单例，共享 token 缓存）"""
+        return self._sources.get(name)
+
     def search(self, keyword: str, city: str | None = None, source_name: str | None = None) -> list[dict]:
         """搜索演出信息，按优先级分层返回结果
 
@@ -510,20 +516,11 @@ def search_event(keyword: str, city: str | None = None) -> str:
 
     优先从大麦播报站获取实时数据，补充 Tavily 联网搜索。
     """
-    results = _manager.search(keyword, city)
-
-    # 过滤掉错误结果，只保留有效数据
-    valid_results = [r for r in results if not r.get("error")]
+    # DataSourceManager.search 已在 manager 层过滤错误结果：
+    # 只返回有效数据，全部失败时返回 []（此处无需再做二次过滤）
+    valid_results = _manager.search(keyword, city)
 
     if not valid_results:
-        # 检查是否有特定数据源的错误
-        errors = [r for r in results if r.get("error")]
-        if errors:
-            # 如果只有 Tavily 错误但 Damai 无结果，返回"未找到"而不是错误
-            return json.dumps(
-                {"message": f"大麦播报站暂未收录「{keyword}」的演出信息", "suggestion": "该演出可能尚未上架或不在当前播报范围内，建议关注官方票务平台"},
-                ensure_ascii=False,
-            )
         return json.dumps(
             {"message": f"未找到与 '{keyword}' 相关的演出信息", "suggestion": "可以尝试换个关键词，或者指定城市搜索"},
             ensure_ascii=False,
@@ -557,8 +554,8 @@ def get_damai_broadcast(city: str | None = None, category: str | None = None) ->
     直接调用大麦 MTOP API，返回播报站的实时数据。
     用于每日播报、开票提醒等场景。
     """
-    # 使用全局管理器中的缓存实例，避免重复创建
-    damai = _manager._sources.get("damai")
+    # 复用全局管理器中已注册的单例（共享 MTOP token 缓存），避免重复创建
+    damai = _manager.get_source("damai")
     if not damai:
         damai = DamaiDataSource()
         _manager.register(damai)
