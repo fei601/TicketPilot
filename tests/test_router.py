@@ -70,3 +70,63 @@ class TestClassifyOrderAction:
     def test_delete_beats_edit(self):
         """删除与编辑词同现时删除优先"""
         assert classify_order_action("修改一下，把张三订单删除") == "delete"
+
+
+# ===========================================
+# v0.2 三域路由（置信度级联）
+# ===========================================
+
+class TestClassifyDomain:
+    """三域路由：硬特征快路径 → LLM 三域分类 → 关键词容错映射"""
+
+    def test_hard_path_id_card_bypasses_llm(self, monkeypatch):
+        """身份证硬特征直接 ORDER，LLM 级不允许被调用"""
+        from ticketpilot.core import llm as llm_mod
+        from ticketpilot.core.router import Domain, classify_domain
+
+        def boom(*a, **k):
+            raise AssertionError("硬特征快路径不应调用 LLM")
+
+        monkeypatch.setattr(llm_mod, "chat", boom)
+        assert classify_domain(
+            "张三310101199001011234 上海周杰伦 10.1 1280连座") == Domain.ORDER
+
+    def test_hard_path_manage_command_bypasses_llm(self, monkeypatch):
+        """「指令词+对象词」组合句式直接 ORDER"""
+        from ticketpilot.core import llm as llm_mod
+        from ticketpilot.core.router import Domain, classify_domain
+
+        def boom(*a, **k):
+            raise AssertionError("硬特征快路径不应调用 LLM")
+
+        monkeypatch.setattr(llm_mod, "chat", boom)
+        assert classify_domain("把张三的订单删了") == Domain.ORDER
+        assert classify_domain("修改一下李四的单子") == Domain.ORDER
+
+    def test_keyword_fallback_mapping(self):
+        """use_llm=False：关键词五分类映射到三域"""
+        from ticketpilot.core.router import Domain, classify_domain
+
+        assert classify_domain("帮我整理一下这个客户的订单", use_llm=False) == Domain.ORDER
+        assert classify_domain("查看订单", use_llm=False) == Domain.ORDER
+        assert classify_domain("周杰伦什么时候开票", use_llm=False) == Domain.AGENT
+        assert classify_domain("你好", use_llm=False) == Domain.AGENT
+        assert classify_domain("什么是一开二开", use_llm=False) == Domain.QA
+
+    def test_llm_domain_classification(self, monkeypatch):
+        """LLM 级：JSON 输出映射到域"""
+        from ticketpilot.core import llm as llm_mod
+        from ticketpilot.core.router import Domain, classify_domain
+
+        monkeypatch.setattr(llm_mod, "chat",
+                            lambda *a, **k: {"content": '{"domain": "QA"}'})
+        assert classify_domain("随便一句话") == Domain.QA
+
+    def test_llm_garbage_falls_back_to_keywords(self, monkeypatch):
+        """LLM 输出无法解析时回退关键词容错层"""
+        from ticketpilot.core import llm as llm_mod
+        from ticketpilot.core.router import Domain, classify_domain
+
+        monkeypatch.setattr(llm_mod, "chat",
+                            lambda *a, **k: {"content": "不是JSON"})
+        assert classify_domain("大麦怎么退票") == Domain.QA

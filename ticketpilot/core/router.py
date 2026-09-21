@@ -1,12 +1,17 @@
 """
-意图路由模块（纯关键词版，不依赖 LLM）
+意图路由模块（v0.2 三域版）
 
-根据用户输入判断应该走哪条处理路线：
-- ORDER_PARSE: 订单信息整理
-- EVENT_QUERY: 演出信息查询
-- KNOWLEDGE_QA: 票务知识问答
-- ORDER_MANAGE: 订单管理操作
-- GENERAL: 通用对话
+路由选「处理范式」而不是「话题」，输出三个域：
+- ORDER: 订单域（解析+管理，确定性流水线）
+- AGENT: Agent 域（演出查询+通用对话，function calling 工具循环）
+- QA:    知识域（检索增强问答）
+
+分类采用置信度级联（便宜且确定的在前）：
+1. 硬特征快路径：18 位身份证正则 / 「指令词+对象词」组合句式 → 直接 ORDER，零 LLM 成本
+2. LLM 三域分类（失败自动回退）
+3. 关键词五分类映射到三域（classify_intent_simple，纯规则容错层）
+
+注：五类 IntentType 保留为观测/展示标签（前端与遥测依赖），不再参与路由决策。
 """
 
 import re
@@ -20,12 +25,19 @@ from ticketpilot.data.constants import CITIES, HOT_ARTISTS
 
 
 class IntentType(str, Enum):
-    """意图类型枚举"""
+    """意图类型枚举（v0.2 起仅作为观测/展示标签，路由决策用 Domain）"""
     ORDER_PARSE = "ORDER_PARSE"
     EVENT_QUERY = "EVENT_QUERY"
     KNOWLEDGE_QA = "KNOWLEDGE_QA"
     ORDER_MANAGE = "ORDER_MANAGE"
     GENERAL = "GENERAL"
+
+
+class Domain(str, Enum):
+    """路由三域：按处理范式划分"""
+    ORDER = "ORDER"   # 确定性订单流水线（解析 + 管理）
+    AGENT = "AGENT"   # 工具 agent（function calling 工具循环）
+    QA = "QA"         # 检索增强知识问答
 
 
 # ===========================================
@@ -94,15 +106,34 @@ def _is_order_content(text: str) -> bool:
     return False
 
 
+def is_order_content(text: str) -> bool:
+    """订单内容硬特征检测（公开版，供编排层域内分流复用）"""
+    return _is_order_content(text)
+
+
+def looks_like_event_query(text: str) -> bool:
+    """
+    演出查询特征检测（纯规则）。
+
+    供 Agent 域退化路径使用：LLM 首轮未调工具时，判断是否应直接执行
+    search_event 兜底查询。注意：调用方应保证订单硬特征已在上游拦截，
+    此处不再做订单排除（v0.1 中该排除分支不可达，重构时移除）。
+    """
+    if any(kw in text for kw in EVENT_KEYWORDS_HIGH):
+        return True
+    if any(artist in text for artist in ARTIST_LIST):
+        return True
+    if any(city in text for city in CITY_LIST):
+        return any(kw in text for kw in ["演出", "演唱会", "音乐节", "票"])
+    return False
+
+
 def classify_intent_simple(user_input: str) -> IntentType:
     """
     基于关键词的意图分类（纯规则，不调用 LLM）。
 
-    Args:
-        user_input: 用户输入的文本
-
-    Returns:
-        IntentType 枚举值
+    v0.2 起作为容错映射层：LLM 分类失败时的回退，并通过
+    DOMAIN_FROM_INTENT 映射到三域。
     """
     text = user_input.lower().strip()
 
@@ -123,24 +154,9 @@ def classify_intent_simple(user_input: str) -> IntentType:
     if any(kw in text for kw in manage_keywords):
         return IntentType.ORDER_MANAGE
 
-    # 2. 演出查询（高优先级）
-    # 2.1 直接包含演出相关关键词
-    if any(kw in text for kw in EVENT_KEYWORDS_HIGH):
+    # 2. 演出查询
+    if looks_like_event_query(text):
         return IntentType.EVENT_QUERY
-
-    # 2.2 艺人名 + 询问性内容（如"薛之谦下半年演出"）
-    # 但排除订单内容（如"重庆凤凰传奇 10.16 1380连坐..."）
-    if any(artist in text for artist in ARTIST_LIST):
-        # 如果同时包含日期和票价，可能是订单
-        if re.search(r'\d+\.\d+|\d+月\d+', text) and re.search(r'\d{3,4}', text):
-            if any(kw in text for kw in ["连坐", "连座", "全平台"]):
-                return IntentType.ORDER_PARSE
-        return IntentType.EVENT_QUERY
-
-    # 2.3 城市 + 演出相关词
-    if any(city in text for city in CITY_LIST):
-        if any(kw in text for kw in ["演出", "演唱会", "音乐节", "票"]):
-            return IntentType.EVENT_QUERY
 
     # 3. 知识问答
     if any(kw in text for kw in KNOWLEDGE_KEYWORDS):
@@ -196,143 +212,137 @@ def classify_order_action(user_input: str) -> str:
     return "summary"
 
 
-# LLM 意图分类提示词
-INTENT_CLASSIFY_PROMPT = """你是一个票务助手的意图分类器。根据用户输入，判断其意图类别。
+# ===========================================
+# 硬特征快路径（级联第 1 级：零 LLM 成本）
+# ===========================================
 
-## 意图类别
+# 「指令词+对象词」组合句式：裸指令词（如单独的"删除"）太松，不进快路径
+_MANAGE_COMMAND_RE = re.compile(
+    r"(把|将).{0,20}?(订单|单子).{0,10}?(删|改|撤|加|补|更新|标记)"
+    r"|(删掉|删除|删了|移除|撤掉|修改|更改|改成|改为|更新).{0,10}?(订单|单子)"
+)
 
-### ORDER_PARSE（订单整理）
-用户发送了客户订单信息，需要整理保存。
+
+def _hard_feature_domain(text: str) -> Domain | None:
+    """
+    级联第 1 级：硬特征快路径。
+
+    两类近零误判特征，命中直接进订单域，不烧 LLM：
+    1. 18 位身份证正则
+    2. 「指令词+对象词」组合句式（删除/修改订单类指令）
+    """
+    if _has_id_card(text):
+        return Domain.ORDER
+    if _MANAGE_COMMAND_RE.search(text):
+        return Domain.ORDER
+    return None
+
+
+# 五意图 → 三域映射（容错层与观测标签共用）
+DOMAIN_FROM_INTENT = {
+    IntentType.ORDER_PARSE: Domain.ORDER,
+    IntentType.ORDER_MANAGE: Domain.ORDER,
+    IntentType.EVENT_QUERY: Domain.AGENT,
+    IntentType.GENERAL: Domain.AGENT,
+    IntentType.KNOWLEDGE_QA: Domain.QA,
+}
+
+
+# LLM 三域分类提示词（级联第 2 级）
+DOMAIN_CLASSIFY_PROMPT = """你是一个票务助手的路由分类器。根据用户输入，判断其应进入哪个处理域。
+
+## 三个域
+
+### ORDER（订单域）
+用户在提交或管理订单数据。
 特征：
-- 包含人名+身份证号（如"张三 123456789012345678"）
-- 包含演出信息+票价+日期（如"上海薛之谦 10.11 1680"）
-- 包含联系电话
-- 批量发送多条订单信息要求整理
-- 包含"整理"、"记录"、"保存"等词+订单内容
+- 提交客户信息要求整理/记录/保存（人名+身份证号、演出+票价+日期、联系电话、批量多条）
+- 查看/修改/删除/标记已有订单（"删了"、"改成"、"我的订单"、"中了没"、"撤单"）
 
-### ORDER_MANAGE（订单管理）
-用户要查看、修改或删除已有订单。
+### AGENT（Agent 域）
+用户在查询外部信息或进行通用对话。
 特征：
-- 删除类："删了"、"删除"、"去掉"、"移除"、"把XX的订单删了"、"清空订单"
-- 修改类："修改"、"改成"、"改为"、"把票价改成"、"加个观影人"、"更新"
-- 查看类："查看订单"、"我的订单"、"订单列表"、"订单状态"、"中了没"
-- 状态类："标记中票"、"标记未中"、"撤单"、"退款"
+- 询问演出时间/场次/余票/票价/购票平台（会触发工具调用）
+- 打招呼、闲聊、不明确的请求（不会触发工具调用）
 
-### EVENT_QUERY（演出查询）
-用户询问演出/票务相关信息。
+### QA（知识域）
+用户询问票务规则/术语/流程等知识性问题，不涉及具体演出。
 特征：
-- 询问演出时间、场次（"薛之谦什么时候开票"、"周杰伦演出时间"）
-- 询问票务信息（"有没有余票"、"票价多少"）
-- 包含艺人名/城市名+询问词
-- 询问购票平台
-
-### KNOWLEDGE_QA（知识问答）
-用户询问票务相关的知识性问题。
-特征：
-- 询问流程（"代拍流程是什么"、"怎么抢票"）
-- 询问规则（"实名制是什么意思"、"连坐怎么选"）
-- 不涉及具体演出
-
-### GENERAL（通用对话）
-其他所有内容，包括：
-- 打招呼、闲聊
-- 不明确的请求
-- 格式选择（"默认"、"默认格式"）
+- "实名制是什么意思"、"怎么退票"、"一开二开是什么"、"连坐怎么选"
 
 ## 输出格式
 
 只输出一个 JSON，不要输出其他内容：
-{"intent": "意图类别"}
+{"domain": "ORDER" 或 "AGENT" 或 "QA"}
 
 ## 示例
 
-输入：重庆凤凰传奇 10.16 1380连坐 全平台 徐洁红510122200504170063 顾良强510623200101267518
-输出：{"intent": "ORDER_PARSE"}
+输入：重庆凤凰传奇 10.16 1380连坐 全平台 徐洁红510122200504170063
+输出：{"domain": "ORDER"}
 
 输入：把荣佳颖的订单删了
-输出：{"intent": "ORDER_MANAGE"}
-
-输入：删除所有订单
-输出：{"intent": "ORDER_MANAGE"}
+输出：{"domain": "ORDER"}
 
 输入：薛之谦下半年有什么演出
-输出：{"intent": "EVENT_QUERY"}
-
-输入：代拍流程是什么
-输出：{"intent": "KNOWLEDGE_QA"}
+输出：{"domain": "AGENT"}
 
 输入：你好
-输出：{"intent": "GENERAL"}
+输出：{"domain": "AGENT"}
 
-输入：默认
-输出：{"intent": "ORDER_PARSE"}
+输入：代拍流程是什么
+输出：{"domain": "QA"}
 
 ## 重要规则
 
 1. 只输出 JSON，不要解释
-2. 如果用户发送了包含人名+身份证号的内容，一定是 ORDER_PARSE
-3. "删了"、"删除"、"去掉"等词出现在任何上下文中，都是 ORDER_MANAGE
-4. 不确定时归类为 GENERAL"""
+2. 包含人名+身份证号的内容一定是 ORDER
+3. 不确定时归类为 AGENT"""
 
 
-def classify_intent_with_llm(user_input: str, context: str = "") -> IntentType:
+def classify_domain(user_input: str, context: str = "", use_llm: bool = True) -> Domain:
     """
-    使用 LLM 进行意图分类。
+    路由入口（置信度级联）：硬特征快路径 → LLM 三域分类 → 关键词容错映射。
 
     Args:
         user_input: 用户输入的文本
-        context: 上下文信息（最近的对话历史）
+        context: 上下文信息（最近的对话历史），仅用于 LLM 分类
+        use_llm: False 时跳过 LLM 级（纯规则路径，供测试/降级）
 
     Returns:
-        IntentType 枚举值
+        Domain 枚举值
     """
-    from ticketpilot.core import llm
+    text = user_input.lower().strip()
 
-    # 构建包含上下文的提示
-    context_prompt = INTENT_CLASSIFY_PROMPT
-    if context:
-        context_prompt += f"\n\n## 上下文\n{context}\n\n注意：如果用户的话是对上文的补充或修改（如补充票价、修改信息），应归类为 ORDER_MANAGE。"
+    # 级联第 1 级：硬特征快路径（零成本、近零误判）
+    hard = _hard_feature_domain(text)
+    if hard is not None:
+        logger.info(f"[router] 硬特征快路径命中: {hard.value}")
+        return hard
 
-    messages = [
-        {"role": "system", "content": context_prompt},
-        {"role": "user", "content": user_input},
-    ]
+    # 级联第 2 级：LLM 三域分类
+    if use_llm:
+        from ticketpilot.core import llm
 
-    try:
-        response = llm.chat(messages, temperature=0, max_tokens=50)
-        content = response.get("content", "").strip()
+        context_prompt = DOMAIN_CLASSIFY_PROMPT
+        if context:
+            context_prompt += f"\n\n## 上下文\n{context}\n\n注意：如果用户的话是对上文的补充或修改（如补充票价、修改信息），应归类为 ORDER。"
 
-        # 提取 JSON
-        from ticketpilot.core.utils import extract_json
-        result = extract_json(content)
-        if isinstance(result, dict):
-            intent_str = result.get("intent", "GENERAL")
+        messages = [
+            {"role": "system", "content": context_prompt},
+            {"role": "user", "content": user_input},
+        ]
+        try:
+            response = llm.chat(messages, temperature=0, max_tokens=50)
+            content = response.get("content", "").strip()
 
-            # 映射到 IntentType
-            intent_map = {
-                "ORDER_PARSE": IntentType.ORDER_PARSE,
-                "ORDER_MANAGE": IntentType.ORDER_MANAGE,
-                "EVENT_QUERY": IntentType.EVENT_QUERY,
-                "KNOWLEDGE_QA": IntentType.KNOWLEDGE_QA,
-                "GENERAL": IntentType.GENERAL,
-            }
-            return intent_map.get(intent_str, IntentType.GENERAL)
-    except Exception as e:
-        logger.warning(f"LLM 意图分类失败: {e}")
+            from ticketpilot.core.utils import extract_json
+            result = extract_json(content)
+            if isinstance(result, dict):
+                domain_str = result.get("domain", "")
+                if domain_str in Domain.__members__:
+                    return Domain[domain_str]
+        except Exception as e:
+            logger.warning(f"LLM 域分类失败，回退关键词: {e}")
 
-    # 失败时回退到关键词分类
-    return classify_intent_simple(user_input)
-
-
-def classify_intent(user_input: str, context: str = "") -> IntentType:
-    """
-    意图分类入口：优先使用 LLM，失败时回退到关键词。
-
-    Args:
-        user_input: 用户输入的文本
-        context: 上下文信息
-
-    Returns:
-        IntentType 枚举值
-    """
-    return classify_intent_with_llm(user_input, context)
+    # 级联第 3 级：关键词五分类 → 三域映射（容错）
+    return DOMAIN_FROM_INTENT[classify_intent_simple(user_input)]

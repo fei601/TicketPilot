@@ -4,8 +4,11 @@
 将 frontend/app.py 与 api/routes.py 各自维护的五个意图分支（约 600 行
 重复且已漂移的实现）收敛为一份共享编排逻辑，两个入口退化为薄适配器。
 
+v0.2：路由输出三域（ORDER 订单域 / AGENT 工具域 / QA 知识域），路由选范式不选话题；
+五类 IntentType 降级为观测/展示标签（前端与遥测依赖），不再参与路由决策。
+
 分支行为以 Streamlit 聊天页为基准（功能最全），并合并 API 版的优点：
-- 意图分类统一走 router.classify_intent（LLM + 关键词兜底）
+- 域分类统一走 router.classify_domain（硬特征快路径 → LLM → 关键词容错）
 - 工具循环统一为 _run_tool_loop（单轮，坏 arguments 不再抛异常）
 - ORDER_PARSE 回复统一脱敏（format_order_masked），保存后回填 order.id
 - EVENT_QUERY 降级提示取 API 版全量 source_hint，关键词剥离取 app 版全量正则
@@ -22,7 +25,7 @@ from datetime import timedelta
 from ticketpilot.agent.order_manager import OrderManager
 from ticketpilot.core import llm, prompts, router
 from ticketpilot.core.privacy import mask_pii_in_text
-from ticketpilot.core.router import IntentType
+from ticketpilot.core.router import Domain, IntentType
 from ticketpilot.core.utils import extract_json
 from ticketpilot.data.constants import CITIES
 from ticketpilot.rag.retriever import retrieve_from_knowledge
@@ -40,17 +43,29 @@ CN_TO_NUM = {
 }
 
 
+# Agent 域工具集：只读查询类工具。写操作（update_order_status 等）只走订单域
+# 确定性路径，被封存的播报类工具不暴露给 LLM（Read/Write 工具分离）
+AGENT_TOOL_NAMES = {
+    "search_event", "get_damai_broadcast",   # 演出查询
+    "check_time",                            # 时间校验
+    "get_my_orders",                         # 订单只读查询
+    "search_knowledge",                      # 知识检索
+}
+# 用于观测标签：调用了演出类工具 → intent 记 EVENT_QUERY，否则 GENERAL
+EVENT_TOOL_NAMES = {"search_event", "get_damai_broadcast"}
+
+
 @dataclass
 class ChatResult:
     """一次对话的处理结果"""
     reply: str
-    intent: str                                   # IntentType.value
-    route: str                                    # order_parse / event_query / knowledge_qa / order_manage / general
+    intent: str                                   # 观测/展示标签（IntentType.value），路由决策见 route
+    route: str                                    # order_parse / order_manage / agent / agent_fallback_search / knowledge_qa
     orders: list = field(default_factory=list)    # ORDER_PARSE 新建的 Order（id 已回填），供入口做会话记忆
 
 
 class ChatService:
-    """五意图编排服务。实例持有 order_manager 与大麦缓存，可注入以便测试。"""
+    """三域编排服务。实例持有 order_manager 与大麦缓存，可注入以便测试。"""
 
     def __init__(self, order_manager: OrderManager, damai_cache: dict | None = None):
         self.order_manager = order_manager
@@ -67,25 +82,23 @@ class ChatService:
 
         Args:
             user_input: 用户输入
-            context: 上下文（如最近创建的订单），仅用于 LLM 意图分类
-            use_llm_router: True 走 LLM 分类（失败自动回退关键词），False 纯关键词
+            context: 上下文（如最近创建的订单），仅用于 LLM 域分类
+            use_llm_router: True 走 LLM 分类（失败自动回退关键词），False 纯规则路径
         """
-        if use_llm_router:
-            intent = router.classify_intent(user_input, context)
-        else:
-            intent = router.classify_intent_simple(user_input)
+        domain = router.classify_domain(user_input, context, use_llm=use_llm_router)
+        logger.info(f"[chat] domain={domain.value} input={user_input[:50]!r}")
 
-        logger.info(f"[chat] intent={intent.value} input={user_input[:50]!r}")
+        if domain == Domain.ORDER:
+            return self._handle_order(user_input)
+        if domain == Domain.AGENT:
+            return self._handle_agent(user_input)
+        return self._handle_knowledge_qa(user_input)
 
-        if intent == IntentType.ORDER_PARSE:
+    def _handle_order(self, user_input: str) -> ChatResult:
+        """订单域内部分流：订单内容硬特征 → 解析；否则 → 管理子分类"""
+        if router.is_order_content(user_input.lower().strip()):
             return self._handle_order_parse(user_input)
-        elif intent == IntentType.EVENT_QUERY:
-            return self._handle_event_query(user_input)
-        elif intent == IntentType.KNOWLEDGE_QA:
-            return self._handle_knowledge_qa(user_input)
-        elif intent == IntentType.ORDER_MANAGE:
-            return self._handle_order_manage(user_input)
-        return self._handle_general(user_input)
+        return self._handle_order_manage(user_input)
 
     # ===========================================
     # 大麦数据（缓存 + 开抢匹配）
@@ -268,33 +281,45 @@ class ChatService:
     # EVENT_QUERY：演出查询
     # ===========================================
 
-    def _handle_event_query(self, user_input: str) -> ChatResult:
-        # 关键词提取（降级路径用）：剥离疑问词/语气词
-        keywords = re.sub(
-            r'什么时候|开票|余票|票价|查询|搜索|票|演出|演唱会|音乐节|有|什么|呀|呢',
-            '', user_input
-        ).strip()
-        if not keywords:
-            keywords = user_input
+    def _handle_agent(self, user_input: str) -> ChatResult:
+        """
+        Agent 域：function calling 工具循环（演出查询 + 通用对话统一范式）。
 
-        # 方案1: 让 LLM 自己调用工具
-        event_system_prompt = prompts.SYSTEM_PROMPT + """
+        三条路径：
+        1. LLM 首轮调用工具 → _run_tool_loop；观测标签按是否调用演出类工具区分
+        2. LLM 未调工具但输入有演出查询特征 → 直接执行 search_event 后总结（降级）
+        3. 纯闲聊 → 直接返回首轮响应（1 次调用，成本与独立闲聊分支持平）
+        """
+        agent_system_prompt = prompts.SYSTEM_PROMPT + """
 
 ## 重要指令
-用户正在查询演出信息。你必须调用 search_event 工具，不要直接回复。
-调用 search_event 工具时，使用用户输入中的关键词作为 search_query 参数。
+你可以调用只读查询类工具（演出查询、时间校验、订单查询、知识检索）。
+- 用户查询演出信息时，必须调用 search_event 工具，不要凭记忆回答。
+- 闲聊或一般问题直接回答，不要调用工具。
 """
         messages = [
-            {"role": "system", "content": event_system_prompt},
+            {"role": "system", "content": agent_system_prompt},
             {"role": "user", "content": user_input},
         ]
-        response = llm.chat(messages, tools=get_all_tool_schemas())
+        tools = [s for s in get_all_tool_schemas()
+                 if s["function"]["name"] in AGENT_TOOL_NAMES]
+        response = llm.chat(messages, tools=tools)
 
         if response.get("tool_calls"):
-            reply = self._run_tool_loop(messages, response, done_fallback="查询完成")
-        else:
-            # 方案2: LLM 未调用工具，直接执行查询后让 LLM 总结
-            logger.info(f"[EVENT_QUERY] LLM 未调用工具，直接执行查询，关键词: {keywords}")
+            called = {tc.get("function") for tc in response.get("tool_calls", [])}
+            # 兜底文案用中性默认值（Agent 域不止查询，还有闲聊/时间等工具路径）
+            reply = self._run_tool_loop(messages, response)
+            intent = (IntentType.EVENT_QUERY.value if called & EVENT_TOOL_NAMES
+                      else IntentType.GENERAL.value)
+            return ChatResult(reply=reply, intent=intent, route="agent")
+
+        # 降级路径：LLM 未调工具但输入像演出查询 → 直接查后总结
+        if router.looks_like_event_query(user_input.lower().strip()):
+            keywords = re.sub(
+                r'什么时候|开票|余票|票价|查询|搜索|票|演出|演唱会|音乐节|有|什么|呀|呢',
+                '', user_input
+            ).strip() or user_input
+            logger.info(f"[AGENT] LLM 未调用工具，直接执行查询，关键词: {keywords}")
             try:
                 tool_result = execute_tool("search_event", {"keyword": keywords, "city": None})
                 source_hint = self._build_source_hint(tool_result)
@@ -305,10 +330,14 @@ class ChatService:
                 final = llm.chat(final_messages)
                 reply = final.get("content") or "查询完成，但无法生成回复"
             except Exception as e:
-                logger.error(f"[EVENT_QUERY] 工具调用失败: {e}")
+                logger.error(f"[AGENT] 工具调用失败: {e}")
                 reply = f"抱歉，查询演出信息时遇到问题：{e}"
+            return ChatResult(reply=reply, intent=IntentType.EVENT_QUERY.value,
+                              route="agent_fallback_search")
 
-        return ChatResult(reply=reply, intent=IntentType.EVENT_QUERY.value, route="event_query")
+        # 闲聊快路径：无 tool_call 直接返回，成本与独立闲聊分支持平
+        reply = response.get("content") or "抱歉，我无法处理这个请求"
+        return ChatResult(reply=reply, intent=IntentType.GENERAL.value, route="agent")
 
     @staticmethod
     def _build_source_hint(tool_result: str) -> str:
@@ -691,16 +720,3 @@ class ChatService:
     # GENERAL：通用对话（带工具循环）
     # ===========================================
 
-    def _handle_general(self, user_input: str) -> ChatResult:
-        messages = [
-            {"role": "system", "content": prompts.SYSTEM_PROMPT},
-            {"role": "user", "content": user_input},
-        ]
-        response = llm.chat(messages, tools=get_all_tool_schemas())
-
-        if response.get("tool_calls"):
-            reply = self._run_tool_loop(messages, response)
-        else:
-            reply = response.get("content") or "抱歉，我无法处理这个请求"
-
-        return ChatResult(reply=reply, intent=IntentType.GENERAL.value, route="general")

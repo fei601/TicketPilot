@@ -62,20 +62,20 @@ def test_chat_general_keyword_router(mem_service, monkeypatch):
     body = resp.json()
     assert body["reply"] == "你好！有什么可以帮你的？"
     assert body["intent"] == "GENERAL"
-    assert body["route"] == "general"
+    assert body["route"] == "agent"  # v0.2：闲聊归入 Agent 域
 
 
 def test_chat_default_uses_llm_router(mem_service, monkeypatch):
-    """use_llm_router 默认值已切为 True：不传字段时走 router.classify_intent"""
-    from ticketpilot.core.router import IntentType
+    """use_llm_router 默认值已切为 True：不传字段时走 router.classify_domain"""
+    from ticketpilot.core.router import Domain
 
     called = []
 
-    def fake_classify(user_input, context=""):
+    def fake_classify(user_input, context="", use_llm=True):
         called.append(user_input)
-        return IntentType.GENERAL
+        return Domain.AGENT
 
-    monkeypatch.setattr(cs_mod.router, "classify_intent", fake_classify)
+    monkeypatch.setattr(cs_mod.router, "classify_domain", fake_classify)
     monkeypatch.setattr(cs_mod.llm, "chat", lambda *a, **k: {"content": "ok"})
 
     resp = client.post("/chat", json={"message": "你好"})

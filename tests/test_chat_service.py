@@ -43,14 +43,12 @@ def service(om):
 # ===========================================
 
 class TestDispatch:
-    def test_five_branches(self, service, monkeypatch):
-        """关键词分类（use_llm_router=False）正确分发到五个分支"""
+    def test_three_domains(self, service, monkeypatch):
+        """关键词路径（use_llm_router=False）按三域分发"""
         for method, tag in [
-            ("_handle_order_parse", "parse"),
-            ("_handle_event_query", "event"),
+            ("_handle_order", "order"),
+            ("_handle_agent", "agent"),
             ("_handle_knowledge_qa", "kb"),
-            ("_handle_order_manage", "manage"),
-            ("_handle_general", "general"),
         ]:
             monkeypatch.setattr(
                 service, method,
@@ -58,31 +56,49 @@ class TestDispatch:
             )
 
         cases = [
-            ("帮我整理一下这个客户的订单", "parse"),
-            ("周杰伦什么时候开票", "event"),
+            ("帮我整理一下这个客户的订单", "order"),
+            ("查看订单", "order"),
+            ("周杰伦什么时候开票", "agent"),
+            ("你好", "agent"),
             ("什么是一开二开", "kb"),
-            ("查看订单", "manage"),
-            ("你好", "general"),
         ]
         for text, expected in cases:
             result = service.chat(text, use_llm_router=False)
-            assert result.reply == expected, f"输入 {text!r} 应走 {expected} 分支"
+            assert result.reply == expected, f"输入 {text!r} 应走 {expected} 域"
+
+    def test_order_domain_internal_dispatch(self, service, monkeypatch):
+        """订单域内部：内容硬特征 → 解析；否则 → 管理子分类"""
+        monkeypatch.setattr(
+            service, "_handle_order_parse",
+            lambda t: ChatResult(reply="parse", intent="X", route="parse"),
+        )
+        monkeypatch.setattr(
+            service, "_handle_order_manage",
+            lambda t: ChatResult(reply="manage", intent="X", route="manage"),
+        )
+
+        # 身份证硬特征 → 解析
+        r = service._handle_order("张三310101199001011234 上海周杰伦 10.1 1280连座")
+        assert r.reply == "parse"
+        # 管理指令（无订单内容特征）→ 管理
+        r = service._handle_order("查看订单")
+        assert r.reply == "manage"
 
     def test_llm_router_receives_context(self, service, monkeypatch):
-        """use_llm_router=True 时走 router.classify_intent 并传入 context"""
-        from ticketpilot.core.router import IntentType
+        """use_llm_router=True 时走 router.classify_domain 并传入 context"""
+        from ticketpilot.core.router import Domain
 
         captured = {}
 
-        def fake_classify(user_input, context=""):
+        def fake_classify(user_input, context="", use_llm=True):
             captured["input"] = user_input
             captured["context"] = context
-            return IntentType.GENERAL
+            return Domain.AGENT
 
-        monkeypatch.setattr(cs_mod.router, "classify_intent", fake_classify)
+        monkeypatch.setattr(cs_mod.router, "classify_domain", fake_classify)
         monkeypatch.setattr(
-            service, "_handle_general",
-            lambda t: ChatResult(reply="ok", intent="GENERAL", route="general"),
+            service, "_handle_agent",
+            lambda t: ChatResult(reply="ok", intent="GENERAL", route="agent"),
         )
         service.chat("你好", context="最近创建的订单：X", use_llm_router=True)
         assert captured["input"] == "你好"
@@ -169,7 +185,7 @@ class TestToolLoop:
             {"content": "现在是下午3点"},
         ])
 
-        result = service._handle_general("现在几点")
+        result = service._handle_agent("现在几点")
 
         assert result.reply == "现在是下午3点"
         assert executed == [("check_time", {})]
@@ -195,7 +211,7 @@ class TestToolLoop:
             {"content": "done"},
         ])
 
-        result = service._handle_general("现在几点")
+        result = service._handle_agent("现在几点")
         assert result.reply == "done"
         assert executed == [("check_time", {})]
 
@@ -208,7 +224,7 @@ class TestToolLoop:
             {"content": None},
         ])
         monkeypatch.setattr(cs_mod, "execute_tool", lambda name, args: "ok")
-        result = service._handle_general("现在几点")
+        result = service._handle_agent("现在几点")
         assert result.reply == "处理完成"
 
 
@@ -272,7 +288,8 @@ class TestEventQuery:
             return {"content": "以下是查询结果"}
 
         monkeypatch.setattr(cs_mod.llm, "chat", fake_chat)
-        result = service._handle_event_query("周杰伦什么时候开票")
+        result = service._handle_agent("周杰伦什么时候开票")
+        assert result.route == "agent_fallback_search"
 
         # 疑问词已剥离，只剩艺人名
         assert executed == [("search_event", {"keyword": "周杰伦", "city": None})]
