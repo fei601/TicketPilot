@@ -71,6 +71,16 @@ class TestClassifyOrderAction:
         """删除与编辑词同现时删除优先"""
         assert classify_order_action("修改一下，把张三订单删除") == "delete"
 
+    def test_confirm(self):
+        assert classify_order_action("确认全部") == "confirm"
+        assert classify_order_action("确认第2条") == "confirm"
+        assert classify_order_action("没问题") == "confirm"
+        assert classify_order_action("就这样") == "confirm"
+
+    def test_delete_beats_confirm(self):
+        """破坏性动作判定先于确认：「确认删除」按删除处理"""
+        assert classify_order_action("确认删除订单3") == "delete"
+
 
 # ===========================================
 # v0.2 三域路由（置信度级联）
@@ -102,6 +112,7 @@ class TestClassifyDomain:
         monkeypatch.setattr(llm_mod, "chat", boom)
         assert classify_domain("把张三的订单删了") == Domain.ORDER
         assert classify_domain("修改一下李四的单子") == Domain.ORDER
+        assert classify_domain("确认订单1") == Domain.ORDER
 
     def test_keyword_fallback_mapping(self):
         """use_llm=False：关键词五分类映射到三域"""

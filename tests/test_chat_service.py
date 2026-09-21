@@ -394,6 +394,79 @@ class TestOrderManage:
 
 
 # ===========================================
+# 草稿确认（D3：LLM 解析先落 draft，人工确认后生效）
+# ===========================================
+
+class TestDraftConfirm:
+    def test_parse_saves_draft_with_confirm_hint(self, service, om, monkeypatch):
+        """解析结果默认草稿落库，回复带确认引导"""
+        monkeypatch.setattr(service, "build_sale_alerts", lambda new_orders=None: "")
+        monkeypatch.setattr(cs_mod.llm, "chat",
+                            lambda *a, **k: {"content": TestOrderParse.ORDER_JSON})
+
+        result = service._handle_order_parse(
+            "上海周杰伦演唱会 10.1 1280连座两张 张三13800138000")
+
+        assert om.get_all_orders()[0].confirmed is False
+        assert "草稿" in result.reply
+        assert "确认全部" in result.reply
+
+    def test_confirm_all(self, service, om):
+        om.save_order(Order(customer_name="A", event_name="演唱会1"))
+        om.save_order(Order(customer_name="B", event_name="演唱会2"))
+
+        result = service._handle_order_manage("确认全部")
+
+        assert "已确认全部 2 条草稿订单" in result.reply
+        assert all(o.confirmed for o in om.get_all_orders())
+        assert result.route == "order_manage"
+
+    def test_confirm_by_index(self, service, om):
+        om.save_order(Order(customer_name="A", event_name="演唱会1"))
+        om.save_order(Order(customer_name="B", event_name="演唱会2"))
+
+        reply = service._manage_confirm("确认第2条")
+
+        assert "已确认订单：演唱会2" in reply
+        orders = om.get_all_orders()
+        assert orders[0].confirmed is False  # 只确认目标那条
+        assert orders[1].confirmed is True
+
+    def test_confirm_idempotent(self, service, om):
+        order_id = om.save_order(Order(customer_name="A", event_name="演唱会1"))
+        om.confirm_order(order_id)
+
+        reply = service._manage_confirm("确认第1条")
+        assert "无需重复确认" in reply
+
+    def test_confirm_no_drafts(self, service, om):
+        assert "没有待确认" in service._manage_confirm("确认全部")
+
+    def test_bare_confirm_lists_drafts_without_guessing(self, service, om):
+        """无序号的裸「确认」：列出草稿让用户选，不批量生效"""
+        om.save_order(Order(customer_name="A", event_name="演唱会1"))
+
+        reply = service._manage_confirm("确认")
+
+        assert "待确认的草稿订单" in reply
+        assert "演唱会1" in reply
+        assert om.get_all_orders()[0].confirmed is False
+
+    def test_summary_shows_draft_count(self, service, om):
+        om.save_order(Order(customer_name="A", event_name="演唱会1"))
+        assert "| 待确认草稿 | 1 |" in service._manage_summary()
+
+    def test_query_all_marks_drafts(self, service, om, monkeypatch):
+        om.save_order(Order(customer_name="A", event_name="上海周杰伦演唱会"))
+        monkeypatch.setattr(
+            cs_mod.llm, "chat",
+            lambda *a, **k: {"content": '{"keywords": [], "query_type": "all"}'},
+        )
+        result = service._handle_order_manage("查看所有订单")
+        assert "待确认" in result.reply
+
+
+# ===========================================
 # 大麦缓存与开抢匹配
 # ===========================================
 

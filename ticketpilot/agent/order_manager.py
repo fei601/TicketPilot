@@ -148,6 +148,10 @@ class OrderManager:
         """更新订单状态"""
         return self.db.update_order_status(order_id, status)
 
+    def confirm_order(self, order_id: int) -> bool:
+        """确认草稿（与抢票状态无关，只翻转 confirmed 位）"""
+        return self.db.confirm_order(order_id)
+
     def mark_success(self, order_id: int) -> bool:
         """标记为中票"""
         return self.update_status(order_id, OrderStatus.SUCCESS)

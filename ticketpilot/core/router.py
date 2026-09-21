@@ -150,6 +150,8 @@ def classify_intent_simple(user_input: str) -> IntentType:
                        "查看订单", "我的订单", "订单列表", "更新状态", "标记中票", "标记未中",
                        "删除", "删掉", "删了", "移除", "去掉", "取消订单", "撤掉",
                        "修改", "更改", "改成", "改为", "加上", "增加", "添加", "补充", "更新订单",
+                       "确认订单", "确认单子",  # 草稿确认（容错层只收订单绑定的严格搭配，
+                                               # 裸"确认/没问题"留给 LLM 级结合上下文判断）
                        "把", "的订单", "的单子"]  # "把...删了" 模式
     if any(kw in text for kw in manage_keywords):
         return IntentType.ORDER_MANAGE
@@ -175,6 +177,9 @@ DELETE_KEYWORDS = ["删除", "删掉", "删了", "移除", "去掉", "撤掉"]
 EDIT_KEYWORDS = ["修改", "更改", "更新", "改成", "改为", "加上", "增加", "添加", "补充",
                  "加一个", "加个", "前面加", "后面加", "换成"]
 QUERY_KEYWORDS = ["有", "有没有", "查", "查询", "找", "单子", "订单状态"]
+# 确认词只在订单域内解释（能走到这里的输入已被路由判为 ORDER），
+# 所以"没问题"这类闲聊常用词在此上下文里就是确认草稿，无跨域误伤。
+CONFIRM_KEYWORDS = ["确认", "没问题", "无误", "就这样"]
 
 
 def classify_order_action(user_input: str) -> str:
@@ -182,19 +187,22 @@ def classify_order_action(user_input: str) -> str:
     ORDER_MANAGE 意图的子分类。
 
     规则（与原 Streamlit 聊天页行为一致）：
-    1. delete 优先：命中删除词即删除（与编辑词同现时删除优先）
-    2. query 次之：命中查询词且未命中删除/编辑词
-    3. edit 再次：命中编辑词
-    4. "把…订单/单子"句式无明确动作词时默认按删除处理
-    5. 都不命中 → summary（订单状态汇总表）
+    1. delete 优先：命中删除词即删除（与编辑词同现时删除优先；
+       "确认删除"同样按删除处理——破坏性动作的判定永远先于确认）
+    2. confirm 次之：命中确认词（草稿生效）
+    3. query：命中查询词且未命中删除/编辑词
+    4. edit：命中编辑词
+    5. "把…订单/单子"句式无明确动作词时默认按删除处理
+    6. 都不命中 → summary（订单状态汇总表）
 
     Args:
         user_input: 用户输入文本
 
     Returns:
-        "delete" | "edit" | "query" | "summary"
+        "delete" | "confirm" | "edit" | "query" | "summary"
     """
     is_delete = any(kw in user_input for kw in DELETE_KEYWORDS)
+    is_confirm = any(kw in user_input for kw in CONFIRM_KEYWORDS)
     is_edit = any(kw in user_input for kw in EDIT_KEYWORDS)
     is_query = any(kw in user_input for kw in QUERY_KEYWORDS) and not is_delete and not is_edit
 
@@ -205,6 +213,8 @@ def classify_order_action(user_input: str) -> str:
 
     if is_delete:
         return "delete"
+    if is_confirm:
+        return "confirm"
     if is_query:
         return "query"
     if is_edit:
@@ -217,9 +227,10 @@ def classify_order_action(user_input: str) -> str:
 # ===========================================
 
 # 「指令词+对象词」组合句式：裸指令词（如单独的"删除"）太松，不进快路径
+# "确认"入列：「确认订单/单子」是订单域专属搭配，闲聊里几乎不出现，误判率近零
 _MANAGE_COMMAND_RE = re.compile(
-    r"(把|将).{0,20}?(订单|单子).{0,10}?(删|改|撤|加|补|更新|标记)"
-    r"|(删掉|删除|删了|移除|撤掉|修改|更改|改成|改为|更新).{0,10}?(订单|单子)"
+    r"(把|将).{0,20}?(订单|单子).{0,10}?(删|改|撤|加|补|更新|标记|确认)"
+    r"|(删掉|删除|删了|移除|撤掉|修改|更改|改成|改为|更新|确认).{0,10}?(订单|单子)"
 )
 
 
@@ -258,6 +269,7 @@ DOMAIN_CLASSIFY_PROMPT = """你是一个票务助手的路由分类器。根据�
 特征：
 - 提交客户信息要求整理/记录/保存（人名+身份证号、演出+票价+日期、联系电话、批量多条）
 - 查看/修改/删除/标记已有订单（"删了"、"改成"、"我的订单"、"中了没"、"撤单"）
+- 确认草稿订单（"确认"、"确认全部"、"没问题"、"就这样"——尤其当上文刚整理过订单时）
 
 ### AGENT（Agent 域）
 用户在查询外部信息或进行通用对话。
@@ -281,6 +293,9 @@ DOMAIN_CLASSIFY_PROMPT = """你是一个票务助手的路由分类器。根据�
 输出：{"domain": "ORDER"}
 
 输入：把荣佳颖的订单删了
+输出：{"domain": "ORDER"}
+
+输入：确认全部，没问题
 输出：{"domain": "ORDER"}
 
 输入：薛之谦下半年有什么演出

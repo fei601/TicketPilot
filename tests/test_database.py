@@ -78,3 +78,66 @@ class TestDatabase:
         assert success is True
 
         assert self.db.get_order(order_id) is None
+
+    def test_confirmed_default_false_and_confirm(self):
+        """新订单默认草稿；confirm_order 翻转且不触碰 status"""
+        order_id = self.db.add_order(Order(customer_name="A", event_name="演出A"))
+        assert self.db.get_order(order_id).confirmed is False
+
+        assert self.db.confirm_order(order_id) is True
+        retrieved = self.db.get_order(order_id)
+        assert retrieved.confirmed is True
+        assert retrieved.status == OrderStatus.PENDING  # 与抢票生命周期正交
+
+    def test_confirm_missing_order_returns_false(self):
+        assert self.db.confirm_order(999) is False
+
+
+class TestConfirmedMigration:
+    """v0.1 老库（无 confirmed 列）→ v0.2 的启动迁移"""
+
+    def _make_legacy_db(self, path):
+        """手工建一个 v0.1 schema 的库并塞一条存量订单"""
+        import sqlite3
+        from datetime import datetime
+
+        conn = sqlite3.connect(path)
+        conn.execute("""
+            CREATE TABLE orders (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                customer_name TEXT NOT NULL, event_name TEXT NOT NULL,
+                event_date TEXT, platform TEXT, ticket_type TEXT,
+                quantity INTEGER DEFAULT 1, seats TEXT, budget TEXT, notes TEXT,
+                status TEXT DEFAULT 'pending',
+                created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+            )
+        """)
+        now = datetime.now().isoformat()
+        conn.execute(
+            "INSERT INTO orders (customer_name, event_name, created_at, updated_at)"
+            " VALUES ('老客户', '老演出', ?, ?)", (now, now))
+        conn.commit()
+        conn.close()
+
+    def test_legacy_rows_grandfathered_as_confirmed(self, tmp_path):
+        """存量订单视为已确认：升级不该逼用户手工确认全部历史数据"""
+        db_file = tmp_path / "legacy.db"
+        self._make_legacy_db(db_file)
+
+        db = Database(db_file)
+        orders = db.get_all_orders()
+        assert len(orders) == 1
+        assert orders[0].confirmed is True
+
+    def test_migration_idempotent_and_new_drafts_survive_reopen(self, tmp_path):
+        """迁移只在缺列时执行一次；重开库不会把新草稿洗成已确认"""
+        db_file = tmp_path / "legacy.db"
+        self._make_legacy_db(db_file)
+
+        Database(db_file)                      # 第一次打开：ALTER + grandfather
+        db = Database(db_file)                 # 第二次打开：列已存在，不再迁移
+        new_id = db.add_order(Order(customer_name="新客", event_name="新演出"))
+
+        db2 = Database(db_file)                # 第三次打开
+        assert db2.get_order(new_id).confirmed is False  # 新草稿未被洗白
+        assert db2.get_all_orders()[0].confirmed is True  # 存量仍是已确认

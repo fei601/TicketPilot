@@ -33,5 +33,9 @@ class Order(BaseModel):
     budget: str | None = Field(default=None, description="预算")
     notes: str | None = Field(default=None, description="备注")
     status: OrderStatus = Field(default=OrderStatus.PENDING, description="订单状态")
+    # 草稿标记：LLM 解析结果默认 confirmed=False（草稿），人工确认后转 True。
+    # 与 status（抢票生命周期）正交——「确认字段正确」和「抢没抢到票」是两件事，
+    # 混进 OrderStatus 会让状态机多出一倍组合（草稿×6 状态），故独立成布尔位。
+    confirmed: bool = Field(default=False, description="是否已人工确认（False=草稿）")
     created_at: datetime = Field(default_factory=datetime.now, description="创建时间")
     updated_at: datetime = Field(default_factory=datetime.now, description="更新时间")

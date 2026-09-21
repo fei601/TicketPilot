@@ -60,10 +60,19 @@ class Database:
                 budget TEXT,
                 notes TEXT,
                 status TEXT DEFAULT 'pending',
+                confirmed INTEGER DEFAULT 0,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )
         """)
+        # 迁移：CREATE TABLE IF NOT EXISTS 不会给已存在的老库加列，
+        # 老库（v0.1，无 confirmed）在每次启动时探测并 ALTER TABLE 补列。
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(orders)")}
+        if "confirmed" not in columns:
+            conn.execute("ALTER TABLE orders ADD COLUMN confirmed INTEGER DEFAULT 0")
+            # 存量订单视为已确认（grandfathering）：它们是 v0.1 时代人工直接使用的
+            # 数据，若一律标成草稿，升级后用户要手工确认全部历史订单，纯属打扰。
+            conn.execute("UPDATE orders SET confirmed = 1")
         conn.commit()
 
     def add_order(self, order: Order) -> int:
@@ -76,8 +85,8 @@ class Database:
                 INSERT INTO orders (
                     customer_name, event_name, event_date, platform,
                     ticket_type, quantity, seats, budget, notes,
-                    status, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    status, confirmed, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     order.customer_name,
@@ -90,6 +99,7 @@ class Database:
                     order.budget,
                     order.notes,
                     order.status.value,
+                    int(order.confirmed),
                     now,
                     now,
                 ),
@@ -119,6 +129,7 @@ class Database:
                     budget=row["budget"],
                     notes=row["notes"],
                     status=OrderStatus(row["status"]),
+                    confirmed=bool(row["confirmed"]),
                     created_at=datetime.fromisoformat(row["created_at"]),
                     updated_at=datetime.fromisoformat(row["updated_at"]),
                 )
@@ -153,6 +164,7 @@ class Database:
                     budget=row["budget"],
                     notes=row["notes"],
                     status=OrderStatus(row["status"]),
+                    confirmed=bool(row["confirmed"]),
                     created_at=datetime.fromisoformat(row["created_at"]),
                     updated_at=datetime.fromisoformat(row["updated_at"]),
                 )
@@ -169,6 +181,26 @@ class Database:
             cursor = conn.execute(
                 "UPDATE orders SET status = ?, updated_at = ? WHERE id = ?",
                 (status.value, now, order_id),
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+        finally:
+            self._close_conn(conn)
+
+    def confirm_order(self, order_id: int) -> bool:
+        """
+        确认草稿（confirmed: 0 → 1）。
+
+        不复用 update_order(**kwargs)：那个方法的白名单过滤 `v is not None`
+        会把 confirmed=False 之类的显式假值语义搞混，且确认是单向状态翻转
+        （草稿→确认，没有反向操作），单独一条 UPDATE 语义最清晰。
+        """
+        now = datetime.now().isoformat()
+        conn = self._get_conn()
+        try:
+            cursor = conn.execute(
+                "UPDATE orders SET confirmed = 1, updated_at = ? WHERE id = ?",
+                (now, order_id),
             )
             conn.commit()
             return cursor.rowcount > 0

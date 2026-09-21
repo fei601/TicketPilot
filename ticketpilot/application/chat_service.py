@@ -266,7 +266,10 @@ class ChatService:
             order.id = order_id
             all_replies.append(format_order_masked(order, order_id=order_id, idx=idx))
 
-        reply = f"已整理 {len(orders)} 条订单：\n\n" + "\n\n---\n\n".join(all_replies)
+        reply = f"已整理 {len(orders)} 条订单（草稿）：\n\n" + "\n\n---\n\n".join(all_replies)
+
+        # 草稿边界：LLM 解析结果不直接生效，明确告知用户如何确认
+        reply += "\n\n📝 以上为草稿，请核对无误后回复「确认全部」或「确认第N条」生效。"
 
         # 自动检查新增订单是否今天/明天开抢
         reply += self.build_sale_alerts(new_orders=orders)
@@ -392,6 +395,8 @@ class ChatService:
 
         if action == "delete":
             reply = self._manage_delete(user_input)
+        elif action == "confirm":
+            reply = self._manage_confirm(user_input)
         elif action == "query":
             reply = self._manage_query(user_input)
         elif action == "edit":
@@ -486,20 +491,31 @@ class ChatService:
 
         return [], "all"
 
+    @staticmethod
+    def _parse_order_index(user_input: str, verb: str = "删除") -> int | None:
+        """
+        解析指令中的 1-based 订单序号；删除/确认共用。
+
+        抽公共函数的理由：「第N条」的语义必须在所有管理动作里完全一致，
+        用户不该为删除和确认维护两套序号心智模型。
+        verb 控制"动词N"简写（"删除3"/"确认3"）里允许的动词。
+        """
+        # "第N条/个/份/单"（支持中文数字）
+        m = re.search(r'第([一二三四五六七八九十\d]+)[条个份单]', user_input)
+        if m:
+            cn_num = m.group(1)
+            if cn_num in CN_TO_NUM:
+                return int(CN_TO_NUM[cn_num])
+            if cn_num.isdigit():
+                return int(cn_num)
+            return None
+        # "订单N" 或 "动词N"
+        m = re.search(rf'(?:订单|{verb})\s*(\d+)', user_input)
+        return int(m.group(1)) if m else None
+
     def _manage_delete(self, user_input: str) -> str:
         """删除订单：支持 所有/全部/清空、第N条、订单N、LLM 关键词模糊匹配"""
-        # 匹配"第N条/个/份/单"（支持中文数字）
-        order_num_value = None
-        order_num_match = re.search(r'第([一二三四五六七八九十\d]+)[条个份单]', user_input)
-        if order_num_match:
-            cn_num = order_num_match.group(1)
-            if cn_num in CN_TO_NUM:
-                order_num_value = int(CN_TO_NUM[cn_num])
-            elif cn_num.isdigit():
-                order_num_value = int(cn_num)
-
-        # 匹配"订单N"或"删除N"作为序号
-        order_index_match = re.search(r'(?:订单|删除)\s*(\d+)', user_input)
+        order_num_value = self._parse_order_index(user_input, verb="删除")
 
         all_orders = self.order_manager.get_all_orders()
 
@@ -511,11 +527,8 @@ class ChatService:
                 return f"已删除全部 {count} 条订单"
             return "当前没有订单"
 
-        if order_num_value:
+        if order_num_value is not None:
             return self._delete_by_index(all_orders, order_num_value - 1)
-
-        if order_index_match:
-            return self._delete_by_index(all_orders, int(order_index_match.group(1)) - 1)
 
         # LLM 提取关键词模糊匹配
         search_terms, _ = self._extract_order_keywords(user_input, mode="delete")
@@ -561,6 +574,47 @@ class ChatService:
             return "删除失败，请重试"
         return f"订单序号超出范围，当前共 {len(all_orders)} 条订单"
 
+    def _manage_confirm(self, user_input: str) -> str:
+        """
+        确认草稿：支持 全部/所有、第N条、订单N/确认N（序号语义与删除一致）。
+
+        序号按全量订单列表定位（与删除同源），列表展示时草稿也用全局序号，
+        保证「看到的编号」和「要说的编号」是同一个。
+        无序号时列出全部草稿让用户选，而不是猜——确认是不可逆的写操作，
+        宁可多一轮对话也不做歧义下的批量生效。
+        """
+        all_orders = self.order_manager.get_all_orders()
+        drafts = [o for o in all_orders if not o.confirmed]
+
+        # 显式序号优先判定：用户点名了具体订单，就该得到关于那条订单的答复
+        # （"已是确认状态"），而不是被全局的"没有草稿"早退挡掉。
+        order_num_value = self._parse_order_index(user_input, verb="确认")
+        if order_num_value is not None:
+            idx = order_num_value - 1
+            if 0 <= idx < len(all_orders):
+                target = all_orders[idx]
+                if target.confirmed:
+                    return (f"订单 {target.id}（{target.event_name or '未知演出'}）"
+                            f"已是确认状态，无需重复确认")
+                self.order_manager.confirm_order(target.id)
+                return f"已确认订单：{target.event_name or '未知演出'}（订单号：{target.id}）"
+            return f"订单序号超出范围，当前共 {len(all_orders)} 条订单"
+
+        if not drafts:
+            return "当前没有待确认的草稿订单。"
+
+        if any(kw in user_input for kw in ["所有", "全部"]):
+            for o in drafts:
+                self.order_manager.confirm_order(o.id)
+            return f"已确认全部 {len(drafts)} 条草稿订单"
+
+        draft_list = [
+            f"{i}. {o.event_name or '未知演出'}（订单号：{o.id}）"
+            for i, o in enumerate(all_orders, 1) if not o.confirmed
+        ]
+        return ("待确认的草稿订单：\n" + "\n".join(draft_list)
+                + "\n\n回复「确认第N条」或「确认全部」生效。")
+
     def _manage_query(self, user_input: str) -> str:
         """查询订单：今天/明天开抢、关键词模糊查询、全量列表"""
         all_orders = self.order_manager.get_all_orders()
@@ -602,7 +656,7 @@ class ChatService:
                 reply += f"{i}. {order.event_name or '未知演出'}"
                 if order.event_date:
                     reply += f" {order.event_date}"
-                reply += f"（{order.status.value}）\n"
+                reply += f"（{order.status.value}{'，待确认' if not order.confirmed else ''}）\n"
             return reply
         return "当前没有订单。"
 
@@ -704,6 +758,8 @@ class ChatService:
     def _manage_summary(self) -> str:
         """订单状态汇总表（无明确管理动作时的兜底）"""
         summary = self.order_manager.get_status_summary()
+        # 草稿是独立维度（confirmed 位），不进 OrderStatus 枚举，单列一行
+        draft_count = sum(1 for o in self.order_manager.get_all_orders() if not o.confirmed)
         return (
             f"当前订单状态：\n"
             f"| 状态 | 数量 |\n|---|---|\n"
@@ -713,6 +769,7 @@ class ChatService:
             f"| 已撤单 | {summary['cancelled']} |\n"
             f"| 已退款 | {summary['refunded']} |\n"
             f"| 等待二开 | {summary['waiting_second']} |\n"
+            f"| 待确认草稿 | {draft_count} |\n"
             f"| **总计** | **{summary['total']}** |"
         )
 
