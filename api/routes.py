@@ -17,8 +17,8 @@ from pydantic import BaseModel
 from ticketpilot.core import llm, prompts, router
 from ticketpilot.core.router import IntentType
 from ticketpilot.rag.retriever import retrieve_from_knowledge
+import ticketpilot.tools  # noqa: F401 — 触发全量工具注册
 from ticketpilot.tools.base import execute_tool, get_all_tool_schemas
-from ticketpilot.tools import event_search, time_utils  # noqa: F401 — 触发工具注册
 from ticketpilot.agent.order_manager import OrderManager
 from ticketpilot.data.models import OrderStatus
 

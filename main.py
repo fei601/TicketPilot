@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 import uvicorn
 
 from api.routes import app
-from ticketpilot.tools import event_search, time_utils, wechat_parser, broadcast_tools, order_parser, knowledge_qa  # noqa: F401 — 触发工具注册
+import ticketpilot.tools  # noqa: F401 — 触发全量工具注册（本进程供 BroadcastScheduler 使用；uvicorn reload 子进程由 routes.py 自行注册）
 from ticketpilot.agent.broadcast_scheduler import BroadcastScheduler
 from ticketpilot.agent.notifier import Notifier
 
