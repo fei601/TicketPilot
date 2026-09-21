@@ -9,8 +9,15 @@ import json
 from ticketpilot.agent.broadcast_manager import BroadcastManager
 from ticketpilot.tools.base import register_tool
 
-# 全局实例
-_manager = BroadcastManager()
+# 惰性单例：import 本模块不再触发建库/建连接（import 副作用清零）
+_manager = None
+
+
+def _get_manager() -> BroadcastManager:
+    global _manager
+    if _manager is None:
+        _manager = BroadcastManager()
+    return _manager
 
 
 @register_tool(
@@ -24,7 +31,7 @@ _manager = BroadcastManager()
 )
 def get_evening_report() -> str:
     """获取晚间播报报告"""
-    report = _manager.generate_evening_report()
+    report = _get_manager().generate_evening_report()
     return json.dumps(report, ensure_ascii=False, indent=2)
 
 
@@ -39,7 +46,7 @@ def get_evening_report() -> str:
 )
 def cross_check_broadcast() -> str:
     """二次核对播报数据"""
-    result = _manager.cross_check_with_damai()
+    result = _get_manager().cross_check_with_damai()
     return json.dumps(result, ensure_ascii=False, indent=2)
 
 
@@ -63,7 +70,7 @@ def cross_check_broadcast() -> str:
 )
 def check_order_for_event(event_name: str, city: str = None) -> str:
     """查询演出的客户工单"""
-    orders = _manager.get_orders_by_event(event_name, city)
+    orders = _get_manager().get_orders_by_event(event_name, city)
 
     if not orders:
         return json.dumps({

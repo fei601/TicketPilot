@@ -7,14 +7,16 @@
 3. 开票提醒：开票前 10 分钟提醒有工单的项目
 """
 
-import json
 from datetime import timedelta
 
 from ticketpilot.core import llm
 from ticketpilot.data.broadcast_db import BroadcastDB
 from ticketpilot.data.database import Database
-from ticketpilot.tools.event_search import DamaiDataSource
-from ticketpilot.tools.time_utils import get_accurate_time
+
+# 注意：本模块（agent 层）不得在模块级 import tools 层——
+# tools/broadcast_tools.py 反向 import 本模块，模块级互相引用会构成
+# 循环导入（tools 包集中注册后任何先加载 agent 的进程都会 ImportError）。
+# 对 tools 的依赖一律在方法内惰性导入。
 
 
 class BroadcastManager:
@@ -23,7 +25,15 @@ class BroadcastManager:
     def __init__(self):
         self.broadcast_db = BroadcastDB()
         self.order_db = Database()
-        self.damai = DamaiDataSource()
+        self._damai = None
+
+    @property
+    def damai(self):
+        """大麦数据源（惰性创建，避免 agent→tools 模块级循环导入）"""
+        if self._damai is None:
+            from ticketpilot.tools.event_search import DamaiDataSource
+            self._damai = DamaiDataSource()
+        return self._damai
 
     def get_orders_by_event(self, event_name: str, city: str = None) -> list[dict]:
         """
@@ -73,6 +83,8 @@ class BroadcastManager:
                 "summary": "播报内容"
             }
         """
+        from ticketpilot.tools.time_utils import get_accurate_time
+
         now = get_accurate_time()
         tomorrow = (now + timedelta(days=1)).strftime("%Y-%m-%d")
 
@@ -152,6 +164,8 @@ class BroadcastManager:
                 "summary": "核对结果"
             }
         """
+        from ticketpilot.tools.time_utils import get_accurate_time
+
         now = get_accurate_time()
         tomorrow = (now + timedelta(days=1)).strftime("%Y-%m-%d")
 

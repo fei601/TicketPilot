@@ -16,8 +16,15 @@ from ticketpilot.data.database import Database
 from ticketpilot.data.models import Order, OrderStatus
 from ticketpilot.tools.base import register_tool
 
-# 全局数据库实例
-_db = Database()
+# 惰性数据库单例：import 本模块不再触发建库/建表（import 副作用清零）
+_db = None
+
+
+def _get_db() -> Database:
+    global _db
+    if _db is None:
+        _db = Database()
+    return _db
 
 # 订单格式模板
 ORDER_TEMPLATE = """演出场次：{event_info}
@@ -265,7 +272,7 @@ def save_order(event_info: str, viewer_info: str, phone: str, customer_name: str
             event_name=event_info,
             notes=f"观影人：{viewer_info}\n电话：{phone}",
         )
-        order_id = _db.add_order(order)
+        order_id = _get_db().add_order(order)
 
         return json.dumps({
             "success": True,
@@ -300,7 +307,7 @@ def get_my_orders(status: str = None) -> str:
     """
     try:
         order_status = OrderStatus(status) if status else None
-        orders = _db.get_all_orders(order_status)
+        orders = _get_db().get_all_orders(order_status)
 
         order_list = []
         for o in orders:
@@ -347,7 +354,7 @@ def update_order_status(order_id: int, status: str) -> str:
     """
     try:
         new_status = OrderStatus(status)
-        success = _db.update_order_status(order_id, new_status)
+        success = _get_db().update_order_status(order_id, new_status)
 
         if success:
             return json.dumps({
