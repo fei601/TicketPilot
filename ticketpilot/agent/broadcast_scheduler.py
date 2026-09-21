@@ -57,6 +57,10 @@ class BroadcastScheduler:
         print("  • 每天 20:00 - 晚间播报提醒")
         print("  • 每天 08:00 - 早间核对 + 创建开票提醒")
 
+        # 重启补偿：立即重建当天的开票提醒
+        # （job id + replace_existing 幂等，开票时间已过的自动跳过）
+        self._create_ticket_reminders()
+
     def stop(self):
         """停止调度器"""
         self.scheduler.shutdown()
