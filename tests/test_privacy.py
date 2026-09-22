@@ -20,6 +20,7 @@ from ticketpilot.core.router import DOMAIN_CLASSIFY_PROMPT
 ID_A = "310101199001011234"
 ID_B = "31010119900101123X"
 PHONE_A = "13800138000"
+PERMIT_A = "H04400000"  # 评测假号池取值——真实通行证号不得入库，测试也不例外
 
 
 class TestRedactPii:
@@ -53,6 +54,42 @@ class TestRedactPii:
         """LLM 偶尔对数字字段输出 int，回填层不许崩"""
         assert restore_pii(None, {"[ID_1]": ID_A}) is None
         assert restore_pii(1680, {"[ID_1]": ID_A}) == 1680
+
+    def test_permit_redacted_round_trip(self):
+        """审计项#1：港澳通行证（字母+8位）也走占位符——评测数据的真实
+        客户里有持通行证的，修复前这个形态裸奔进 LLM"""
+        text = f"赵六 {PERMIT_A} （港澳居民來往內地通行證）"
+        redacted, mapping = redact_pii(text)
+        assert PERMIT_A not in redacted
+        assert "[PERMIT_1]" in redacted
+        assert restore_pii(redacted, mapping) == text
+
+    def test_permit_boundaries_both_sides(self):
+        """通行证正则两侧断言：单侧断言等于没断言（D5-2.1 教训）"""
+        # 字母+9位（多一位）不是通行证形态，不得误切
+        redacted, _ = redact_pii("单号H044000009")
+        assert "[PERMIT" not in redacted
+        # 前面紧贴字母（长 token 的内部子串）不命中
+        redacted2, _ = redact_pii("SH04400000")
+        assert "[PERMIT" not in redacted2
+
+    def test_mixed_id_permit_phone_all_redacted(self):
+        """三种形态同现：各自占位、互不切碎（顺序 ID→PERMIT→PHONE）"""
+        text = f"张三{ID_A} 赵六 {PERMIT_A} 电话{PHONE_A}"
+        redacted, mapping = redact_pii(text)
+        for raw in (ID_A, PERMIT_A, PHONE_A):
+            assert raw not in redacted
+        assert len(mapping) == 3
+
+
+class TestMaskPiiInText:
+    """展示/日志层脱敏：审计项#1 在 mask 侧的缺口"""
+
+    def test_permit_masked(self):
+        from ticketpilot.core.privacy import mask_pii_in_text
+        masked = mask_pii_in_text(f"赵六 {PERMIT_A}")
+        assert PERMIT_A not in masked
+        assert "H04****00" in masked  # 保字母+前2后2
 
 
 class TestPromptHygiene:
@@ -96,3 +133,27 @@ class TestParseMinimization:
         # 本地还原检查
         assert order.notes == f"张三 {ID_A}"
         assert order.budget == PHONE_A
+
+    def test_permit_placeholder_round_trip(self, monkeypatch):
+        """通行证全链路：LLM 只见 [PERMIT_1]（prompt 规则3/4 已列该占位符），
+        notes 落库前本地还原——审计项#1+#2（redact 缺口+prompt 规则缺口）"""
+        from ticketpilot.agent import order_manager as om_mod
+        from ticketpilot.agent.order_manager import OrderManager
+        from ticketpilot.data.database import Database
+
+        captured = {}
+
+        def fake_chat(messages, **kw):
+            captured["user"] = messages[1]["content"]
+            return {"content": ('{"customer_name": "赵六", "event_name": "广州汪苏泷",'
+                                ' "event_date": "10.3", "ticket_type": "680", "quantity": 1,'
+                                ' "seats": null, "budget": "待补充",'
+                                ' "notes": "赵六 [PERMIT_1]"}')}
+
+        monkeypatch.setattr(om_mod.llm, "chat", fake_chat)
+        om = OrderManager(db=Database(":memory:"))
+        order = om.parse_order_from_text(f"广州汪苏泷 10.3 680 赵六 {PERMIT_A}")
+
+        assert PERMIT_A not in captured["user"]
+        assert "[PERMIT_1]" in captured["user"]
+        assert order.notes == f"赵六 {PERMIT_A}"

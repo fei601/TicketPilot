@@ -16,6 +16,11 @@ logger = logging.getLogger(__name__)
 _ID_CARD_RE = re.compile(r'\d{17}[\dXx]')
 # 11 位手机号
 _PHONE_RE = re.compile(r'1[3-9]\d{9}')
+# 港澳台通行证类证件号：字母+8位数字。评测数据的真实客户里有持
+# 港澳通行证的（审计项#1：修复前 redact_pii 放这个形态裸奔进 LLM）。
+# 两侧都断言不接字母数字：单侧断言等于没断言（mask_eval D5-2.1 教训：
+# 18 位号的 17 位尾巴曾命中右-only 版本，8 个假号全被误报）
+_PERMIT_RE = re.compile(r'(?<![A-Za-z0-9])[HCWSPEDFGhcwspedfg]\d{8}(?!\d)')
 
 
 def redact_pii(text: str) -> tuple[str, dict[str, str]]:
@@ -25,15 +30,19 @@ def redact_pii(text: str) -> tuple[str, dict[str, str]]:
     Returns:
         (脱敏文本, 占位符→原文映射)。映射只留在本进程内存，绝不发给 LLM。
 
-    替换顺序不可交换：必须身份证在前。18 位数字串内部可能包含
-    形如手机号的 11 位子串（如 "…19950716231…" 命中 1[3-9]\\d{9}），
-    先置换手机号会把身份证切碎、产生错位映射。
+    替换顺序固定 ID → PERMIT → PHONE：
+    - 身份证必须最先。18 位数字串内部可能包含形如手机号的 11 位子串
+      （如 "…19950716231…" 命中 1[3-9]\\d{9}），先置换手机号会把
+      身份证切碎、产生错位映射。
+    - 通行证放中间无交叉风险：带字母前缀，两个纯数字正则切不到它；
+      它的 8 位数字也容不下 11 位手机号。顺序写死是为了与评测
+      流水线 mask_eval.py 的处理形态同构，排障时两边行为可互证。
     """
     if not text:
         return text, {}
 
     mapping: dict[str, str] = {}
-    counters = {"ID": 0, "PHONE": 0}
+    counters = {"ID": 0, "PERMIT": 0, "PHONE": 0}
 
     def _repl(kind: str):
         def inner(m):
@@ -44,6 +53,7 @@ def redact_pii(text: str) -> tuple[str, dict[str, str]]:
         return inner
 
     text = _ID_CARD_RE.sub(_repl("ID"), text)
+    text = _PERMIT_RE.sub(_repl("PERMIT"), text)
     text = _PHONE_RE.sub(_repl("PHONE"), text)
     return text, mapping
 
@@ -97,6 +107,14 @@ def mask_pii_in_text(text: str) -> str:
     text = re.sub(
         r'(\d{3})\d{11}(\d{3}[\dXx])',
         lambda m: m.group(1) + "*" * 11 + m.group(2),
+        text
+    )
+
+    # 脱敏通行证类证件号（字母+8位）：保字母+前2后2。展示/日志层同样
+    # 不能裸奔——审计项#1 的缺口在 redact（LLM 侧）和这里（展示侧）各有一个
+    text = re.sub(
+        r'(?<![A-Za-z0-9])([HCWSPEDFGhcwspedfg]\d{2})\d{4}(\d{2})(?!\d)',
+        lambda m: m.group(1) + "****" + m.group(2),
         text
     )
 
