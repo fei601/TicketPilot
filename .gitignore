@@ -44,3 +44,8 @@ logs/
 
 # Streamlit
 .streamlit/
+
+# 评测集工作文件：raw 含真实客户 PII；masked 在人工换名前含真实姓名。
+# 两者都不得入库——换名复核完的定稿才进 eval/eval_set.jsonl
+eval/raw_messages.txt
+eval/masked_messages.txt
