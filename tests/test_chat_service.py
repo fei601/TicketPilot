@@ -233,23 +233,21 @@ class TestToolLoop:
 # ===========================================
 
 class TestKnowledgeQA:
-    def test_empty_context_instructs_llm(self, service, monkeypatch):
-        """检索为空时给 LLM 明确降级指令，防止编造"""
+    def test_hard_gate_refuses_without_llm(self, service, monkeypatch):
+        """硬门控：检索未过阈值 → 罐头拒答，LLM 不允许被调用
+        （防编造从 prompt 恳求升级为控制流物理隔离）"""
         monkeypatch.setattr(cs_mod, "retrieve_from_knowledge", lambda q: "")
-        captured = {}
 
-        def fake_chat(messages, **kw):
-            captured["system"] = messages[0]["content"]
-            return {"content": "知识库暂无相关信息"}
+        def boom(*a, **k):
+            raise AssertionError("拒答路径不应调用 LLM")
 
-        monkeypatch.setattr(cs_mod.llm, "chat", fake_chat)
+        monkeypatch.setattr(cs_mod.llm, "chat", boom)
         result = service._handle_knowledge_qa("什么是配票")
 
-        assert "知识库未检索到相关内容" in captured["system"]
-        assert "不要编造" in captured["system"]
-        assert result.route == "knowledge_qa"
+        assert "知识库暂无相关信息" in result.reply
+        assert result.route == "knowledge_qa_refused"
 
-    def test_hit_context_injected(self, service, monkeypatch):
+    def test_hit_context_injected_with_citation_rule(self, service, monkeypatch):
         monkeypatch.setattr(cs_mod, "retrieve_from_knowledge",
                             lambda q: "配票是指主办方释放余票…")
         captured = {}
@@ -259,9 +257,12 @@ class TestKnowledgeQA:
             return {"content": "回答"}
 
         monkeypatch.setattr(cs_mod.llm, "chat", fake_chat)
-        service._handle_knowledge_qa("什么是配票")
+        result = service._handle_knowledge_qa("什么是配票")
         assert "参考知识库内容" in captured["system"]
         assert "配票是指主办方释放余票" in captured["system"]
+        # 引用要求：回答末尾列来源
+        assert "来源" in captured["system"]
+        assert result.route == "knowledge_qa"
 
 
 # ===========================================
@@ -504,6 +505,30 @@ class TestPiiMinimization:
         assert "310101199001011234" not in captured["prompt"]
         assert "已删除订单" in result.reply
         assert om.get_all_orders() == []
+
+
+# ===========================================
+# 可观测性（D4-2：结构化日志 + 日志脱敏）
+# ===========================================
+
+class TestObservability:
+    def test_chat_logs_structured_and_masked(self, service, monkeypatch, caplog):
+        """每次 chat 落一行 JSON（评测脚本按字段统计域分布/拒答率）；
+        入口日志的 input 字段必须先脱敏——日志文件也是输出通道"""
+        import logging
+
+        monkeypatch.setattr(
+            service, "_handle_order",
+            lambda t: ChatResult(reply="ok", intent="ORDER_PARSE", route="order_parse"),
+        )
+        with caplog.at_level(logging.INFO, logger="ticketpilot.application.chat_service"):
+            service.chat("张三310101199001011234 上海周杰伦", use_llm_router=False)
+
+        assert "310101199001011234" not in caplog.text       # 明文不落日志
+        assert "310***********1234" in caplog.text            # 脱敏形态在
+        assert '"event": "chat"' in caplog.text               # 结构化行存在
+        assert '"domain": "ORDER"' in caplog.text
+        assert '"route": "order_parse"' in caplog.text
 
 
 # ===========================================

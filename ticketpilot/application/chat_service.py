@@ -60,7 +60,7 @@ class ChatResult:
     """一次对话的处理结果"""
     reply: str
     intent: str                                   # 观测/展示标签（IntentType.value），路由决策见 route
-    route: str                                    # order_parse / order_manage / agent / agent_fallback_search / knowledge_qa
+    route: str                                    # order_parse / order_manage / agent / agent_fallback_search / knowledge_qa / knowledge_qa_refused
     orders: list = field(default_factory=list)    # ORDER_PARSE 新建的 Order（id 已回填），供入口做会话记忆
 
 
@@ -86,13 +86,31 @@ class ChatService:
             use_llm_router: True 走 LLM 分类（失败自动回退关键词），False 纯规则路径
         """
         domain = router.classify_domain(user_input, context, use_llm=use_llm_router)
-        logger.info(f"[chat] domain={domain.value} input={user_input[:50]!r}")
+        # 日志也是输出通道：入日志前先脱敏，否则证件号明文躺在日志文件里。
+        # 顺序必须是先脱敏后切片：切片可能把 18 位证件号拦腰切断，
+        # 残段匹配不上整号正则，半截明文就漏进日志了。
+        logger.info(f"[chat] domain={domain.value} input={mask_pii_in_text(user_input)[:50]!r}")
 
         if domain == Domain.ORDER:
-            return self._handle_order(user_input)
-        if domain == Domain.AGENT:
-            return self._handle_agent(user_input)
-        return self._handle_knowledge_qa(user_input)
+            result = self._handle_order(user_input)
+        elif domain == Domain.AGENT:
+            result = self._handle_agent(user_input)
+        else:
+            result = self._handle_knowledge_qa(user_input)
+
+        # 结构化日志：一行机器可读 JSON。评测脚本直接从日志统计
+        # 域分布/拒答率（knowledge_qa_refused 占比）/各 route 计数，
+        # 不需要为观测单独埋点。字段名即口径，改字段=改指标定义。
+        logger.info(json.dumps({
+            "event": "chat",
+            "domain": domain.value,
+            "route": result.route,
+            "intent": result.intent,
+            "llm_router": use_llm_router,
+            "orders_created": len(result.orders),
+            "reply_len": len(result.reply),
+        }, ensure_ascii=False))
+        return result
 
     def _handle_order(self, user_input: str) -> ChatResult:
         """订单域内部分流：订单内容硬特征 → 解析；否则 → 管理子分类"""
@@ -367,14 +385,30 @@ class ChatService:
     # KNOWLEDGE_QA：知识库问答
     # ===========================================
 
-    def _handle_knowledge_qa(self, user_input: str) -> ChatResult:
-        # retriever 无结果时返回空串，给 LLM 明确降级指令防止编造
-        context = retrieve_from_knowledge(user_input)
-        if context:
-            kb_hint = f"\n\n参考知识库内容：\n{context}"
-        else:
-            kb_hint = "\n\n知识库未检索到相关内容。请直接告知用户知识库暂无相关信息，不要编造。"
+    KB_REFUSAL = ("知识库暂无相关信息，目前功能还在完善中。"
+                  "建议咨询业内人士或查阅官方资料。")
 
+    def _handle_knowledge_qa(self, user_input: str) -> ChatResult:
+        """
+        QA 域：RAG 硬门控。
+
+        检索未过阈值 → 直接返回罐头拒答，0 次 LLM 调用：把「不许编造」
+        从 prompt 里的恳求升级为控制流层面的物理隔离——模型根本没机会编。
+        过阈值 → 注入上下文，并要求回答末尾列出引用来源（可核查性）。
+        """
+        context = retrieve_from_knowledge(user_input)
+        if not context:
+            logger.info("[QA] 硬门控拦截：检索未达阈值，直接拒答（0 LLM）")
+            return ChatResult(
+                reply=self.KB_REFUSAL,
+                intent=IntentType.KNOWLEDGE_QA.value, route="knowledge_qa_refused",
+            )
+
+        kb_hint = (
+            f"\n\n参考知识库内容：\n{context}"
+            "\n\n回答要求：只依据上述知识库内容回答，不得补充知识库之外的信息；"
+            "回答末尾另起一行，用「来源：《小节标题》」列出实际引用的小节。"
+        )
         messages = [
             {"role": "system", "content": prompts.SYSTEM_PROMPT + kb_hint},
             {"role": "user", "content": user_input},
