@@ -36,10 +36,19 @@ def load_knowledge_docs() -> list[dict]:
         chunks = _split_by_heading(content)
 
         for i, chunk in enumerate(chunks):
+            # 小节标题优先：chunk 以 "## " 开头时用该 heading 做 title，
+            # 否则（文件头到第一个 ## 之间的引子块）回退文件级 "# " 标题。
+            # 为什么：引用链路承诺的是小节粒度——retriever 拼【来源：title】，
+            # LLM 被要求按「来源：《小节标题》」落引用。全部 chunk 共用文件级
+            # 标题时，引用退化成《常见问题 FAQ》：指向整个文件而非答案出处，
+            # 用户无法核对，D4 验收项"来源引用"名存实亡。
+            first_line = chunk.split("\n", 1)[0]
+            chunk_title = (first_line.lstrip("#").strip()
+                           if first_line.startswith("## ") else title)
             docs.append({
                 "content": chunk,
                 "source": md_file.name,
-                "title": title,
+                "title": chunk_title,
                 "chunk_index": i,
             })
 
