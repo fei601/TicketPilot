@@ -36,8 +36,10 @@ OUT = BASE / "masked_messages.txt"
 
 # 港澳台通行证/回乡证类：字母+8位数字。前后不接字母数字，避免误伤
 _PERMIT_RE = re.compile(r'(?<![A-Za-z0-9])[HCWSPEDFGhcwspedfg]\d{8}(?!\d)')
-# 12-17 位数字残段：半截证件号嫌疑，仅标记行号交人工
-_PARTIAL_RE = re.compile(r'\d{12,17}(?!\d)')
+# 12-17 位数字残段：半截证件号嫌疑，仅标记行号交人工。
+# 两侧都要断言不接数字：只写 (?!\d) 时，18 位假证件号从第 2 位起
+# 的 17 位尾巴也会命中（左端无界），8 个假号全被误报成残段
+_PARTIAL_RE = re.compile(r'(?<!\d)\d{12,17}(?!\d)')
 
 _TEMPLATE = """\
 # ── 评测集原始消息收集箱（本文件已 gitignore，真实 PII 永不入库）──
