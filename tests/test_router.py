@@ -114,6 +114,51 @@ class TestClassifyDomain:
         assert classify_domain("修改一下李四的单子") == Domain.ORDER
         assert classify_domain("确认订单1") == Domain.ORDER
 
+    def test_interrogative_manage_reaches_llm(self, monkeypatch):
+        """疑问句守卫（评测 qa-2）：「可以修改订单里面的观演人吗」曾命中
+        修改+订单硬句式，llm=0 直接判 ORDER——疑问句里对象词是咨询话题。
+        断言两层：不被硬层拦截（LLM 必须被调用）+ 按 LLM 判定走"""
+        from ticketpilot.core import llm as llm_mod
+        from ticketpilot.core.router import Domain, classify_domain
+
+        calls = []
+
+        def fake_chat(messages, **k):
+            calls.append(messages)
+            return {"content": '{"domain": "QA"}'}
+
+        monkeypatch.setattr(llm_mod, "chat", fake_chat)
+        assert classify_domain("可以修改订单里面的观演人吗") == Domain.QA
+        assert calls, "疑问句不该被硬层拦截，必须给 LLM 层机会"
+
+    def test_ticket_progress_with_deixis_hard_pathed(self, monkeypatch):
+        """「这场/我的+配票」进快路径零 LLM（评测 mng-4：配票进度特指
+        自己订单的履约状态，曾被 LLM 误判 AGENT）"""
+        from ticketpilot.core import llm as llm_mod
+        from ticketpilot.core.router import Domain, classify_domain
+
+        def boom(*a, **k):
+            raise AssertionError("硬特征快路径不应调用 LLM")
+
+        monkeypatch.setattr(llm_mod, "chat", boom)
+        assert classify_domain("查一下这场的配票进度") == Domain.ORDER
+
+    def test_bare_peipiao_rule_question_reaches_llm(self, monkeypatch):
+        """裸「配票」规则咨询不进快路径——知识库有《配票是什么意思》条目，
+        快路径只收带指示词（这场/我的）的订单状态问法"""
+        from ticketpilot.core import llm as llm_mod
+        from ticketpilot.core.router import Domain, classify_domain
+
+        calls = []
+
+        def fake_chat(messages, **k):
+            calls.append(messages)
+            return {"content": '{"domain": "QA"}'}
+
+        monkeypatch.setattr(llm_mod, "chat", fake_chat)
+        assert classify_domain("配票是什么意思") == Domain.QA
+        assert calls, "裸「配票」不该命中硬层"
+
     def test_keyword_fallback_mapping(self):
         """use_llm=False：关键词五分类映射到三域"""
         from ticketpilot.core.router import Domain, classify_domain

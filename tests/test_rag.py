@@ -66,6 +66,16 @@ class TestBigramScoring:
         score = self._score("退票大麦", "大麦支持退票")
         assert abs(score - 2 / 3) < 1e-9
 
+    def test_digit_runs_do_not_dilute_coverage(self):
+        """数字串是身份标识不是主题信号（评测 adv-1 抓出：13 位半截号
+        把覆盖度稀释到 0.158，比应拒组最高分还低，阈值救不回来）。
+        性质断言：带数字的查询与剥掉数字的查询得分必须相等"""
+        content = "门票想退票或换场次需要在开演前联系平台客服办理"
+        with_digits = self._score("证件号3101011990010 想退票还要换场次", content)
+        without_digits = self._score("证件号 想退票还要换场次", content)
+        assert with_digits == without_digits
+        assert with_digits >= 0.4  # 主题词（退票/换场次）不被数字淹死
+
 
 class TestRetrieveLogging:
     """检索分数入日志：评测/排障时能回答「这条为什么拒了/为什么答了」"""

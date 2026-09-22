@@ -17,11 +17,19 @@ from ticketpilot.rag.loader import load_knowledge_docs
 logger = logging.getLogger(__name__)
 
 # 硬门控阈值：查询 bigram 至少这个比例命中文档才算检索成功（0~1）。
-# 初始值 0.5，D5 评测集落地后用 误拒率/误答率 校准。
-MIN_RETRIEVE_SCORE = 0.5
+# 校准记录（D5，32 条评测）：应拒组最高分 0.333，应答组最低分 0.462，
+# 0.40 取可分窗口 (0.333, 0.462) 中间，两侧余量均 ~0.06。
+# 窗口是靠两个检索侧修复撑开的：数字串噪声剥离 + 语料「常见问法」补强。
+# 语料/算法再改动后重跑 eval/calibrate_scores.py 复核窗口是否仍成立
+MIN_RETRIEVE_SCORE = 0.40
 
 # 疑问句式噪声词：不携带主题信息，只会稀释覆盖度分母
 _QUESTION_NOISE_RE = re.compile(r'什么是|是什么|怎么|怎样|如何|请问|吗|呢|啊|呀|的|了')
+
+# 数字串噪声（评测 adv-1 抓出）：证件号/订单号/电话是身份标识，不是主题信号。
+# 13 位半截号产生十几个永不命中的 bigram，把覆盖度稀释到 0.158——
+# 比应拒组最高分还低，任何阈值都救不回来，只能在计分前剥掉
+_DIGIT_RUN_RE = re.compile(r'\d+')
 
 
 def _bigrams(text: str) -> set:
@@ -72,11 +80,13 @@ class SimpleRetriever:
         查询对文档的 bigram 覆盖度（0~1）：
         |查询bigram ∩ 文档bigram| / |查询bigram|。
 
-        先剥疑问噪声词（"什么是/怎么/吗"），避免句式词稀释主题词；
+        先剥疑问噪声词（"什么是/怎么/吗"）和数字串（证件号/订单号是
+        身份标识不是主题词），避免非主题字符稀释分母；
         剥离后的查询整体命中文档时直接给满分 1.0。
         """
         query_lower = query.lower()
         cleaned = _QUESTION_NOISE_RE.sub('', query_lower)
+        cleaned = _DIGIT_RUN_RE.sub('', cleaned)
         query_bigrams = _bigrams(cleaned or query_lower)
         if not query_bigrams:
             return 0.0
