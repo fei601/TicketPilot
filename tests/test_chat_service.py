@@ -467,6 +467,46 @@ class TestDraftConfirm:
 
 
 # ===========================================
+# PII 输入最小化（D4：LLM 全程看不到明文证件号/手机号）
+# ===========================================
+
+class TestPiiMinimization:
+    def test_edit_redacts_phone_and_restores(self, service, om, monkeypatch):
+        """改电话指令：LLM 只见 [PHONE_1]，落库还原为真实号码"""
+        om.save_order(Order(customer_name="张三", event_name="上海周杰伦演唱会"))
+        captured = {}
+
+        def fake_chat(messages, **kw):
+            captured["prompt"] = messages[0]["content"]
+            return {"content": '{"target_index": 1, "updates": {"budget": "[PHONE_1]"}}'}
+
+        monkeypatch.setattr(cs_mod.llm, "chat", fake_chat)
+        service._handle_order_manage("把张三的电话改成13800138000")
+
+        assert "13800138000" not in captured["prompt"]
+        assert "[PHONE_1]" in captured["prompt"]
+        assert om.get_all_orders()[0].budget == "13800138000"
+
+    def test_delete_by_id_keyword_restored(self, service, om, monkeypatch):
+        """按证件号删单：提取 prompt 无明文；LLM 回显的占位符关键词
+        本地还原后仍能匹配库里的原文 notes"""
+        om.save_order(Order(customer_name="张三", event_name="演唱会1",
+                            notes="张三 310101199001011234"))
+        captured = {}
+
+        def fake_chat(messages, **kw):
+            captured["prompt"] = messages[0]["content"]
+            return {"content": '{"keywords": ["[ID_1]"]}'}
+
+        monkeypatch.setattr(cs_mod.llm, "chat", fake_chat)
+        result = service._handle_order_manage("删除身份证310101199001011234的订单")
+
+        assert "310101199001011234" not in captured["prompt"]
+        assert "已删除订单" in result.reply
+        assert om.get_all_orders() == []
+
+
+# ===========================================
 # 大麦缓存与开抢匹配
 # ===========================================
 

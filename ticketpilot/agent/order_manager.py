@@ -18,9 +18,16 @@ class OrderManager:
     def __init__(self, db: Database | None = None):
         self.db = db or Database()
 
+    # 回填时逐字段还原占位符的字符串字段清单（Order 的全部 str 字段）
+    _PII_TEXT_FIELDS = ("customer_name", "event_name", "event_date", "platform",
+                        "ticket_type", "seats", "budget", "notes")
+
     def parse_order_from_text(self, text: str) -> Order:
         """
         用 LLM 从自然语言中解析订单信息。
+
+        PII 输入最小化：证件号/手机号在本地换成占位符后才发给 LLM，
+        LLM 只负责结构化，占位符原样带回后在本地还原——明文全程不出进程。
 
         Args:
             text: 用户输入的零散信息
@@ -28,9 +35,12 @@ class OrderManager:
         Returns:
             解析后的 Order 对象
         """
+        from ticketpilot.core.privacy import redact_pii, restore_pii
+
+        redacted_text, pii_map = redact_pii(text)
         messages = [
             {"role": "system", "content": prompts.ORDER_PARSE_PROMPT},
-            {"role": "user", "content": text},
+            {"role": "user", "content": redacted_text},
         ]
 
         response = llm.chat(messages, temperature=0.1, max_tokens=500)
@@ -44,7 +54,11 @@ class OrderManager:
                 # LLM 偶尔输出 [{...}] 而非单对象，取第一个元素
                 data = data[0]
             if isinstance(data, dict):
-                return Order(**data)
+                order = Order(**data)
+                for fname in self._PII_TEXT_FIELDS:
+                    setattr(order, fname,
+                            restore_pii(getattr(order, fname, None), pii_map))
+                return order
             else:
                 # 解析失败时返回一个基础订单
                 return Order(

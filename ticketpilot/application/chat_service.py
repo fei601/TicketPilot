@@ -24,7 +24,7 @@ from datetime import timedelta
 
 from ticketpilot.agent.order_manager import OrderManager
 from ticketpilot.core import llm, prompts, router
-from ticketpilot.core.privacy import mask_pii_in_text
+from ticketpilot.core.privacy import mask_pii_in_text, redact_pii, restore_pii
 from ticketpilot.core.router import Domain, IntentType
 from ticketpilot.core.utils import extract_json
 from ticketpilot.data.constants import CITIES
@@ -416,10 +416,13 @@ class ChatService:
         Returns:
             (search_terms, query_type)；query_type 仅 query 模式有意义
         """
+        # PII 输入最小化：LLM 只见占位符文本；返回的关键词若回显占位符，
+        # 本地还原后再做匹配（匹配目标是库里的原文 notes）
+        redacted_input, pii_map = redact_pii(user_input)
         if mode == "delete":
             extract_prompt = f"""从用户输入中提取用于搜索订单的关键词。
 
-用户输入：{user_input}
+用户输入：{redacted_input}
 
 请提取以下信息（有的才提取，没有的忽略）：
 1. 人名（观影人姓名）
@@ -454,7 +457,7 @@ class ChatService:
         else:
             extract_prompt = f"""从用户输入中提取用于查询订单的关键词。
 
-用户输入：{user_input}
+用户输入：{redacted_input}
 
 请提取以下信息（有的才提取，没有的忽略）：
 1. 人名（观影人姓名）
@@ -484,7 +487,9 @@ class ChatService:
             )
             extract_result = extract_json(extract_response.get("content", "").strip())
             if isinstance(extract_result, dict):
-                return (extract_result.get("keywords", []),
+                keywords = [restore_pii(k, pii_map)
+                            for k in extract_result.get("keywords", [])]
+                return (keywords,
                         extract_result.get("query_type", "specific" if mode == "delete" else "all"))
         except Exception as e:
             logger.warning(f"LLM关键词提取失败: {e}")
@@ -684,6 +689,10 @@ class ChatService:
         if not all_orders:
             return "当前没有订单，无法修改。"
 
+        # PII 输入最小化：LLM 只见占位符文本；updates 里回显的占位符
+        # （如"把电话改成[PHONE_1]"）在本地还原后再落库
+        redacted_input, pii_map = redact_pii(user_input)
+
         # 构建订单列表供 LLM 参考
         order_list_text = ""
         for i, order in enumerate(all_orders, 1):
@@ -691,7 +700,7 @@ class ChatService:
 
         edit_prompt = f"""用户想要修改订单。请分析用户输入，提取以下信息：
 
-用户输入：{user_input}
+用户输入：{redacted_input}
 
 当前订单列表：
 {order_list_text}
@@ -710,8 +719,9 @@ class ChatService:
 输入：把第3条的票价改成1680
 输出：{{"target_index": 3, "updates": {{"ticket_type": "1680"}}}}
 
-输入：把李荣浩的电话改成13800138000
-输出：{{"target_index": 12, "updates": {{"budget": "13800138000"}}}}
+输入：把张三的电话改成[PHONE_1]
+输出：{{"target_index": 12, "updates": {{"budget": "[PHONE_1]"}}}}
+（输入中的 [ID_n]/[PHONE_n] 是占位符，输出时必须原样保留，不要改写）
 
 只输出JSON，不要解释。"""
 
@@ -741,7 +751,7 @@ class ChatService:
 
                 for f in ["ticket_type", "event_date", "platform", "budget", "notes"]:
                     if f in updates:
-                        update_fields[f] = updates[f]
+                        update_fields[f] = restore_pii(updates[f], pii_map)
 
                 if update_fields:
                     success = self.order_manager.update_order(target_order.id, **update_fields)
