@@ -1,6 +1,6 @@
-# 🎫 TicketPilot
+# 🎫 TicketPilot（票务领航员）
 
-> **AI 驱动的票务订单管理助手** — 用自然语言管理你的票务工作流
+> **AI 票务工作台** — 把群聊里零散的真实报单消息，变成结构化订单
 
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.10+-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python">
@@ -11,143 +11,168 @@
 </p>
 
 <p align="center">
-  <a href="#-核心功能">功能特性</a> •
+  <a href="#-项目简介">简介</a> •
+  <a href="#-技术架构">架构</a> •
+  <a href="#-核心功能">核心功能</a> •
+  <a href="#-评测体系与结果">评测</a> •
   <a href="#-快速开始">快速开始</a> •
-  <a href="#-技术架构">技术架构</a> •
-  <a href="#-演示示例">演示</a> •
-  <a href="#-联系方式">联系</a>
+  <a href="#-项目结构">结构</a>
 </p>
 
 ---
 
 ## 📖 项目简介
 
-**TicketPilot** 是一个基于大语言模型（LLM）的票务工作流智能助手，专为票务从业者设计。
+票务代拍的日常：客户消息散落在群聊里，一条报单混着人名、证件号、票价、佣金；订单状态靠脑子记；规则问题答错一次，客户就按错误规则操作真金白银的订单。
 
-### 🎯 解决的痛点
+**TicketPilot** 用 LLM 把这条流水线自动化：贴入报单消息 → 自动解析成结构化订单草稿 → 人工确认落库；规则咨询走检索增强问答，检索不达标直接拒答；实时演出查询走 Agent 工具循环。
 
-票务代拍工作者每天需要：
-- 📝 处理大量零散的客户信息（微信、短信、截图）
-- ⏰ 跟踪多个项目的开票时间
-- 📊 管理订单状态（中票/未中票/撤单/退款）
-- 🔍 监控漏票和二次开票机会
+全链路遵循三条设计底线：
 
-这些重复性工作占据了大量时间，**TicketPilot 用 AI 自动化这些流程**。
-
-### 💡 核心亮点
-
-| 亮点 | 说明 |
-|------|------|
-| 🧠 **LLM 意图分类** | 自然语言理解，无需记忆命令格式 |
-| 📋 **智能订单解析** | 支持多订单批量解析，自动识别佣金、票价 |
-| 🔌 **大麦数据集成** | 实时获取抢票播报站数据，自动匹配订单 |
-| 🔒 **隐私保护** | 身份证号、手机号自动脱敏显示 |
-| 💬 **上下文记忆** | 支持"把刚才的订单改一下"等连续对话 |
-
----
-
-## ✨ 核心功能
-
-### 1️⃣ 智能订单解析
-
-**输入零散信息，自动整理成结构化订单：**
-
-```
-上海站 薛之谦 8.17  1680内场 连坐2张
-张三 310101199901011234
-李四 310101199902022345
-大麦 13800138000
-```
-
-**AI 自动输出：**
-```
-订单 1（订单号：1）
-
-上海站薛之谦 8.17 1680内场 连坐2张
-
-身份信息：
-张三 310***********1234
-李四 310***********2345
-
-联系电话：138****5678
-平台：大麦
-```
-
-### 2️⃣ 自然语言订单管理
-
-```
-👤 用户：把薛之谦的订单票价改成1880
-🤖 助手：已更新订单「上海站薛之谦演唱会」：ticket_type=1880
-
-👤 用户：删除第二条订单
-🤖 助手：已删除订单：XXX演唱会（订单号：2）
-
-👤 用户：我有孙燕姿的单子吗
-🤖 助手：找到 1 条孙燕姿相关订单：...
-```
-
-### 3️⃣ 大麦抢票播报
-
-```
-👤 用户：明天都有什么项目开票？
-🤖 助手：明天需要抢票的订单（3条）：
-
-1. 周杰伦演唱会 - 上海站
-   开票时间：明天 10:00
-   票价：1680/1280/880
-
-2. 薛之谦演唱会 - 北京站
-   开票时间：明天 14:00
-   ...
-```
-
-### 4️⃣ 知识库问答（RAG）
-
-```
-👤 用户：什么是"延顺"？
-🤖 助手：延顺是指当票务订单未中签时，自动延续到下一轮...
-
-👤 用户：大麦和猫眼的退票规则有什么区别？
-🤖 助手：根据票务知识库，两者的主要区别是...
-```
+| 底线 | 落地机制 |
+|------|----------|
+| **PII 不出域** | 发给 LLM 前证件号/通行证/手机号置换为本地占位符，LLM 全程不见明文；展示层默认打星、显式解锁 |
+| **宁可拒答不可错答** | RAG 硬门控：检索得分低于校准阈值直接拒答（答案阶段 0 次 LLM 调用）；通过门控的回答必带小节级来源引用 |
+| **行为可度量** | 全链路结构化日志（域/路由/LLM 调用数/延迟）；32 条金标签评测集 + 跑批器，结果可复现 |
 
 ---
 
 ## 🏗️ 技术架构
 
+路由采用**置信度级联**——便宜且确定的判断在前，贵的在后：
+
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                      用户输入                                │
-└─────────────────────────┬───────────────────────────────────┘
-                          │
-                          ▼
-┌─────────────────────────────────────────────────────────────┐
-│              LLM 意图分类（Intent Router）                    │
-│  ┌──────────┬──────────┬──────────┬──────────┬──────────┐   │
-│  │ 订单解析  │ 演出查询  │ 知识问答  │ 订单管理  │ 通用对话  │   │
-│  └────┬─────┴────┬─────┴────┬─────┴────┬─────┴────┬─────┘   │
-└───────┼──────────┼──────────┼──────────┼──────────┼─────────┘
-        │          │          │          │          │
-        ▼          ▼          ▼          ▼          ▼
-   ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐
-   │ LLM 结构 │ │ 大麦 API │ │ RAG 检索 │ │ CRUD 操 │ │ LLM 对话 │
-   │ 化输出   │ │ + Tavily │ │ 知识库   │ │ 作数据库 │ │         │
-   └─────────┘ └─────────┘ └─────────┘ └─────────┘ └─────────┘
+用户输入
+   │
+   ▼
+[1] 硬特征快路径 ──命中──► ORDER 域（零 LLM 成本）
+   │ 未命中
+   ▼
+[2] LLM 三域分类 ──失败自动回退──► [3] 关键词容错兜底
+   │
+   ▼
+ ORDER / AGENT / QA
 ```
 
-### 技术栈
+三个域对应三种**处理范式**（按范式分域，不按话题分路）：
 
-| 层级 | 技术 | 说明 |
-|------|------|------|
-| **LLM** | DeepSeek API | OpenAI 兼容接口，支持切换任意模型 |
-| **意图分类** | LLM + Prompt Engineering | 零样本意图识别，无需训练 |
-| **订单解析** | LLM 结构化输出 | 支持复杂格式、佣金识别、多订单 |
-| **演出数据** | 大麦 MTOP API | 实时抢票播报站数据 |
-| **联网搜索** | Tavily Search API | 补充搜索实时信息 |
-| **知识库** | RAG (Markdown + 向量检索) | 票务术语、平台规则、抢票技巧 |
-| **数据库** | SQLite | 订单持久化存储 |
-| **前端** | Streamlit | Web 聊天界面 |
-| **隐私保护** | 自研脱敏模块 | 身份证号、手机号自动脱敏 |
+| 域 | 范式 | 说明 |
+|----|------|------|
+| **ORDER** | 确定性流水线 | LLM 解析 → 草稿 → 人工确认 → SQLite 落库；删/改/查/确认/汇总 |
+| **AGENT** | Function Calling 工具循环 | 实时演出查询；多源降级：平台数据源 → 联网搜索 |
+| **QA** | 检索增强问答 | bigram 检索 + 硬门控，达标才调 LLM 作答，回答带来源引用 |
+
+---
+
+## ✨ 核心功能
+
+### 1️⃣ 三域路由（置信度级联）
+
+近零误判的硬特征走快路径，不烧 LLM；拿不准的交给 LLM 三域分类；LLM 失败还有关键词兜底。硬路径配**疑问句守卫**——「可以修改订单里的观演人吗」是规则咨询不是订单操作：
+
+```python
+# ticketpilot/core/router.py
+def _hard_feature_domain(text: str) -> Domain | None:
+    """
+    级联第 1 级：硬特征快路径。
+
+    两类近零误判特征，命中直接进订单域，不烧 LLM：
+    1. 18 位身份证正则
+    2. 「指令词+对象词」组合句式（删除/修改订单类指令，疑问句除外）
+    """
+    if _has_id_card(text):
+        # ID 快路径不设疑问守卫：带完整证件号的疑问句仍是在提交订单数据；
+        # 13 位半截号不命中本正则（两侧边界断言），走后面的层级
+        return Domain.ORDER
+    if _MANAGE_COMMAND_RE.search(text) and not _INTERROGATIVE_RE.search(text):
+        return Domain.ORDER
+    return None
+```
+
+**32 条脱敏评测集路由准确率 100%。**
+
+### 2️⃣ LLM 订单解析 + PII 输入最小化
+
+发给 LLM 之前，所有 PII 先置换成占位符；LLM 返回后在本地还原落库。替换顺序固定 **ID → PERMIT → PHONE**（18 位证件号内部可能包含形如手机号的 11 位子串，先换手机号会把证件号切碎）：
+
+```python
+# ticketpilot/core/privacy.py
+_ID_CARD_RE = re.compile(r'\d{17}[\dXx]')
+_PHONE_RE = re.compile(r'1[3-9]\d{9}')
+_PERMIT_RE = re.compile(r'(?<![A-Za-z0-9])[HCWSPEDFGhcwspedfg]\d{8}(?!\d)')
+
+text = _ID_CARD_RE.sub(_repl("ID"), text)
+text = _PERMIT_RE.sub(_repl("PERMIT"), text)
+text = _PHONE_RE.sub(_repl("PHONE"), text)
+```
+
+LLM 输出**先落草稿**，人工确认后才生效——守住「LLM 输出 ≠ 事实」的边界。展示层默认打星，完整信息需显式解锁并给出警示。
+
+**脱敏评测集订单字段准确率 100%**（覆盖多人报单块、佣金/票价混淆、通行证形态等难样本）。
+
+### 3️⃣ RAG 硬门控 + 来源引用
+
+自建 22 条票务规则语料（含「常见问法」变体），字符 bigram 覆盖度检索。**不用向量库**是这个规模下的取舍：每条拒答都能回答「为什么拒」，阈值可以用工具校准：
+
+```python
+# ticketpilot/rag/retriever.py
+# 硬门控阈值：查询 bigram 至少这个比例命中文档才算检索成功（0~1）。
+# 校准记录（D5，32 条评测）：应拒组最高分 0.333，应答组最低分 0.462，
+# 0.40 取可分窗口 (0.333, 0.462) 中间，两侧余量均 ~0.06。
+# 窗口是靠两个检索侧修复撑开的：数字串噪声剥离 + 语料「常见问法」补强。
+# 语料/算法再改动后重跑 eval/calibrate_scores.py 复核窗口是否仍成立
+MIN_RETRIEVE_SCORE = 0.40
+```
+
+检索未达阈值 → 直接拒答，答案阶段 0 次 LLM 调用；通过门控 → 回答必带小节级来源引用。
+
+### 4️⃣ 自然语言订单管理
+
+```
+👤 把薛之谦的订单票价改成1880
+🤖 已更新订单「上海站薛之谦演唱会」：ticket_type=1880
+
+👤 查一下这场的配票进度
+🤖 订单 #3 上海站薛之谦 8.17 —— 状态：等待二开
+
+👤 什么是"延顺"？
+🤖 延顺是指……（来源：《票务术语词典 · 延顺》）
+```
+
+---
+
+## 📊 评测体系与结果
+
+评测集不是手编的，是从**真实群聊消息**经脱敏流水线加工来的：
+
+```
+raw_messages.txt        真实消息（gitignore，永不入库）
+  → eval/mask_eval.py   证件号/手机号/通行证换假号
+                        （保结构、同值同映射、真值回扫自检）
+  → 人工换假名           同一假号 = 同一客户
+  → eval/eval_set.jsonl 32 条金标签（域/路由/子动作/字段/拒答/引用）
+  → eval/run_eval.py    逐条内存库隔离跑批，端到端 + 子动作双层判分
+  → eval/calibrate_scores.py  阈值可分窗口复核工具
+```
+
+首跑 22/32——抓出 5 处当时 123 个全绿单元测试看不见的静默缺陷（硬路径把规则咨询误判成订单操作、数字串稀释检索分、阈值落在不可分区间等），逐个修复后 32/32。
+
+| 指标 | 结果 |
+|------|------|
+| 路由准确率 | **100%**（32 条脱敏评测集） |
+| 订单字段准确率 | **100%**（36/36） |
+| 误拒 / 漏拒 | **0 / 0** |
+| 来源引用率 | **15/15** |
+| 单元测试 | **133 passed** |
+
+> 口径说明：评测集同时承担校准职能（修复由它驱动），数字描述的是「校准后在这批样本上的表现」，不外推总体。它的价值在于抓出并修复了单测覆盖不到的行为缺陷，且随时可复现。
+
+复现：
+
+```bash
+python -m pytest -q          # 133 个单元测试，LLM 全部打桩，无需 API Key
+python eval/run_eval.py      # 端到端评测，需要 .env 配置 LLM_API_KEY（产生真实 API 调用）
+```
 
 ---
 
@@ -156,7 +181,7 @@
 ### 环境要求
 
 - Python 3.10+
-- DeepSeek API Key（[获取地址](https://platform.deepseek.com/)）
+- DeepSeek API Key（[获取地址](https://platform.deepseek.com/)，任何 OpenAI 兼容接口均可）
 
 ### 安装步骤
 
@@ -183,10 +208,10 @@ cp .env.example .env
 ### 配置 `.env`
 
 ```bash
-# 必填：DeepSeek API Key
+# 必填：LLM API Key（DeepSeek 或其他 OpenAI 兼容服务）
 LLM_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx
 
-# 可选：Tavily 联网搜索（免费注册）
+# 可选：Tavily 联网搜索（Agent 域降级数据源，免费注册）
 TAVILY_API_KEY=tvly-xxxxxxxxxxxxxxxx
 
 # 可选：日志级别
@@ -196,11 +221,10 @@ LOG_LEVEL=INFO
 ### 启动应用
 
 ```bash
-# 启动 Streamlit 前端
 streamlit run frontend/app.py
 ```
 
-浏览器会自动打开 `http://localhost:8501`
+浏览器自动打开 `http://localhost:8501`。
 
 ---
 
@@ -208,183 +232,42 @@ streamlit run frontend/app.py
 
 ```
 TicketPilot/
-├── README.md                         # 项目说明
-├── LICENSE                           # MIT 开源协议
-├── requirements.txt                  # Python 依赖
-├── .env.example                      # 环境变量模板
-├── config.py                         # 配置管理
-├── main.py                           # 后端入口
-│
-├── ticketpilot/                      # 核心包
-│   ├── core/                         # 核心模块
-│   │   ├── llm.py                   # LLM 调用封装（单例模式）
-│   │   ├── router.py                # LLM 意图路由
-│   │   ├── prompts.py               # Prompt 模板管理
-│   │   ├── privacy.py               # PII 隐私保护
-│   │   └── utils.py                 # 通用工具函数
-│   │
-│   ├── agent/                        # Agent 模块
-│   │   ├── order_manager.py         # 订单 CRUD 管理
-│   │   └── scheduler.py             # 定时任务调度
-│   │
-│   ├── tools/                        # Function Calling 工具
-│   │   ├── base.py                  # 工具注册机制
-│   │   ├── event_search.py          # 大麦播报站 + Tavily 搜索
-│   │   └── time_utils.py            # NTP 时间校准
-│   │
-│   ├── rag/                          # RAG 知识库
-│   │   ├── loader.py                # 文档加载器
-│   │   └── retriever.py             # 向量检索
-│   │
-│   ├── data/                         # 数据层
-│   │   ├── database.py              # SQLite 数据库操作
-│   │   ├── models.py                # 数据模型定义
-│   │   └── constants.py             # 全局常量
-│   │
-│   └── knowledge_base/               # RAG 知识文档
-│       ├── glossary.md              # 票务术语词典
-│       ├── platform_rules.md        # 平台规则说明
-│       └── tips.md                  # 抢票技巧
-│
-├── frontend/                         # 前端应用
-│   └── app.py                       # Streamlit Web 界面
-│
-├── api/                              # API 路由
-│   └── routes.py                    # FastAPI 接口
-│
-└── tests/                            # 测试用例
-    ├── test_router.py               # 意图路由测试
-    ├── test_database.py             # 数据库测试
-    └── test_tools.py                # 工具测试
+├── main.py / config.py              # 后端入口 / 配置管理
+├── ticketpilot/
+│   ├── core/                        # llm.py（OpenAI 兼容客户端）
+│   │                                # router.py（三域置信度级联）
+│   │                                # prompts.py（Prompt 模板）
+│   │                                # privacy.py（PII 置换/还原/打星）
+│   │                                # utils.py
+│   ├── application/chat_service.py  # 聊天编排 + 结构化日志
+│   ├── agent/order_manager.py       # 订单解析与 CRUD（草稿→确认）
+│   ├── tools/                       # Function Calling 工具
+│   │                                # （演出检索/订单解析/知识问答）
+│   ├── rag/                         # loader.py（按小节切分，引用粒度）
+│   │                                # retriever.py（bigram 覆盖度 + 硬门控）
+│   ├── data/                        # database.py（SQLite 参数化查询）
+│   │                                # models.py（Pydantic 模型）/ constants.py
+│   └── knowledge_base/              # faq.md（22 条规则）+ 术语/平台规则/购票常识
+├── eval/                            # 脱敏流水线 / 32 条金标签 / 跑批器 / 阈值校准
+├── frontend/app.py                  # Streamlit 界面（默认脱敏展示）
+├── api/routes.py                    # FastAPI 接口
+└── tests/                           # 13 个测试文件，133 个用例
 ```
 
 ---
 
-## 🔧 核心实现
+## 💡 技术栈
 
-### 1. LLM 意图分类
-
-```python
-# ticketpilot/core/router.py
-INTENT_CLASSIFY_PROMPT = """
-你是一个意图分类器，根据用户输入判断意图类型。
-
-意图类型：
-- ORDER_PARSE: 用户提供订单信息，需要整理
-- EVENT_QUERY: 查询演出信息、开票时间
-- ORDER_MANAGE: 删除/修改/查询订单状态
-- KNOWLEDGE_QA: 票务知识问答
-- GENERAL: 其他对话
-
-只输出JSON: {"intent": "ORDER_PARSE"}
-"""
-
-def classify_intent(user_input: str, context: str = "") -> IntentType:
-    """使用 LLM 进行意图分类"""
-    response = llm.chat(messages, temperature=0, max_tokens=50)
-    result = extract_json(response["content"])
-    return intent_map.get(result["intent"], IntentType.GENERAL)
-```
-
-### 2. 多订单智能解析
-
-```python
-# ticketpilot/agent/order_manager.py
-def parse_multiple_orders(self, text: str) -> list[Order]:
-    """
-    智能合并行：只有当行以城市名开头或包含开票关键词时才认为是新订单
-    支持：
-    - 多订单批量解析
-    - 佣金识别（🧧后面的数字是佣金）
-    - 复杂票型（看台随机不要580）
-    """
-    # 使用 LLM 结构化输出
-    response = llm.chat(messages, temperature=0.1, max_tokens=500)
-    return Order(**extract_json(response["content"]))
-```
-
-### 3. 隐私保护
-
-```python
-# ticketpilot/core/privacy.py
-def mask_phone(phone: str) -> str:
-    """手机号脱敏: 13812345678 → 138****5678"""
-
-def mask_pii_in_text(text: str) -> str:
-    """自动检测并脱敏文本中的所有 PII（身份证号/手机号）"""
-```
-
----
-
-## 💡 设计理念
-
-| 理念 | 实现 |
-|------|------|
-| **数据分层路由** | 根据数据特性选择 RAG / API / 搜索 / Agent |
-| **真实数据优先** | 大麦播报站 API + Tavily 联网搜索，不依赖 LLM 记忆 |
-| **隐私第一** | 默认脱敏显示，用户主动选择才展示完整信息 |
-| **上下文感知** | 会话记忆，支持"把刚才的订单改一下" |
-| **优雅降级** | LLM 失败时自动降级到关键词匹配 |
-| **OpenAI 兼容** | 切换 LLM 只改配置，不改代码 |
-
----
-
-## 📊 功能矩阵
-
-| 功能 | 状态 | 技术实现 |
-|------|------|----------|
-| 自然语言订单解析 | ✅ 已完成 | LLM 结构化输出 |
-| 多订单批量解析 | ✅ 已完成 | 智能行合并 + LLM |
-| 订单 CRUD | ✅ 已完成 | SQLite + Agent |
-| LLM 意图分类 | ✅ 已完成 | Prompt Engineering |
-| 大麦数据集成 | ✅ 已完成 | MTOP API 签名 |
-| 开票提醒 | ✅ 已完成 | 订单-数据自动匹配 |
-| RAG 知识库 | ✅ 已完成 | Markdown + 向量检索 |
-| PII 隐私保护 | ✅ 已完成 | 自研脱敏模块 |
-| 企业微信推送 | 🔜 规划中 | Webhook |
-| 漏票监控 | 🔜 规划中 | 定时轮询 |
-
----
-
-## 🎓 AI 技术应用
-
-本项目展示了以下 AI 应用开发能力：
-
-### 1. LLM 应用开发
-- ✅ Prompt Engineering（意图分类、订单解析）
-- ✅ 结构化输出（JSON 格式化）
-- ✅ Function Calling（工具调用）
-- ✅ 上下文管理（会话记忆）
-
-### 2. RAG 检索增强生成
-- ✅ 知识库构建（Markdown 文档）
-- ✅ 向量检索（语义相似度匹配）
-- ✅ 上下文注入（增强 LLM 回答）
-
-### 3. Agent 架构
-- ✅ 意图路由（Intent Router）
-- ✅ 工具调用（Tool Use）
-- ✅ 状态管理（订单 CRUD）
-
-### 4. 工程实践
-- ✅ 模块化设计（core / agent / tools / data）
-- ✅ 错误处理（优雅降级）
-- ✅ 隐私保护（PII 脱敏）
-- ✅ 性能优化（LLM 客户端单例、数据缓存）
-
----
-
-## 🤝 联系方式
-
-📧 **Email**: fei601@example.com
-
-💼 **GitHub**: [github.com/fei601](https://github.com/fei601)
-
----
-
-## 📝 开源协议
-
-本项目采用 [MIT License](LICENSE) 开源协议。
+| 层级 | 技术 | 说明 |
+|------|------|------|
+| **LLM** | DeepSeek API | OpenAI 兼容接口，换模型只改配置 |
+| **路由** | 硬特征 + LLM 分类 + 关键词兜底 | 置信度级联，确定性判断不烧 token |
+| **订单解析** | LLM 结构化输出 + Pydantic 校验 | 多订单拆分、佣金识别、复杂票价 |
+| **检索** | 字符 bigram 覆盖度 | 无向量库，可解释、阈值可校准 |
+| **隐私** | 占位符置换 + 展示打星 | LLM 全程不见明文 PII |
+| **存储** | SQLite | 参数化查询防注入 |
+| **前端** | Streamlit | Web 聊天界面 |
+| **测试** | pytest + 自建评测跑批器 | 133 单测 + 32 条端到端金标签 |
 
 ---
 
@@ -401,7 +284,8 @@ def mask_pii_in_text(text: str) -> str:
 
 ---
 
-<p align="center">
-  如果这个项目对你有帮助，请给一个 ⭐ Star 支持一下！
-</p>
+## 📝 开源协议
 
+本项目采用 [MIT License](LICENSE) 开源协议。
+
+💼 **GitHub**: [github.com/fei601](https://github.com/fei601)
