@@ -49,3 +49,6 @@ logs/
 # 两者都不得入库——换名复核完的定稿才进 eval/eval_set.jsonl
 eval/raw_messages.txt
 eval/masked_messages.txt
+
+# 评测重跑产物：随时可由 run_eval.py 再生，不入库
+eval/results.json
