@@ -13,10 +13,11 @@
 为什么同值同映射：同一客户的证件号跨多条消息重复出现时必须映射到
 同一个假号，否则"同客户先报单再改单"的多轮评测场景直接断裂。
 
-为什么本脚本要有通行证号正则、而不复用 privacy 的：真实数据里存在
-港澳通行证（字母+8位），privacy.py 只认 18 位身份证——评测集是要
-入库的文件，真 PII 零容忍，所以流水线必须盖住数据里实际出现的形态。
-（生产侧 privacy.py 的同一缺口已记入审计清单，另行修复。）
+通行证号（字母+8位）的覆盖史：评测期间发现 privacy.py 只认 18 位
+身份证，真实数据里的港澳通行证会漏——当时在本脚本内自带 _PERMIT_RE
+补位。生产侧修复（845d403：redact_pii 认通行证并发 [PERMIT_n] 占位符）
+落地后，脚本侧副本永远匹配不到东西（redact 输出里已无裸通行证号），
+沦为死代码——已删除。同一正则只允许有一个家：privacy.py。
 
 为什么 12-17 位残段只记行号不自动替换：残段可能是半截证件号（真 PII），
 也可能是订单号/票号（不是）——机器分不清的，交人工裁决，不静默放过。
@@ -34,8 +35,6 @@ BASE = Path(__file__).parent
 RAW = BASE / "raw_messages.txt"
 OUT = BASE / "masked_messages.txt"
 
-# 港澳台通行证/回乡证类：字母+8位数字。前后不接字母数字，避免误伤
-_PERMIT_RE = re.compile(r'(?<![A-Za-z0-9])[HCWSPEDFGhcwspedfg]\d{8}(?!\d)')
 # 12-17 位数字残段：半截证件号嫌疑，仅标记行号交人工。
 # 两侧都要断言不接数字：只写 (?!\d) 时，18 位假证件号从第 2 位起
 # 的 17 位尾巴也会命中（左端无界），8 个假号全被误报成残段
@@ -92,18 +91,9 @@ def main() -> None:
         if not line.strip() or line.lstrip().startswith("#"):
             out_lines.append(line)
             continue
+        # 通行证形态由 redact_pii 直接覆盖（生产侧修复 845d403），
+        # mapping 里的 [PERMIT_n] 与 [ID_n]/[PHONE_n] 走同一条通用映射
         redacted, mapping = redact_pii(line)
-
-        # 通行证号：privacy 不认的形态，本脚本补位（见模块 docstring）
-        counters = {"n": 0}
-
-        def _permit_repl(m, _c=counters, _map=mapping):
-            _c["n"] += 1
-            token = f"[PERMIT_{_c['n']}]"
-            _map[token] = m.group(0)
-            return token
-
-        redacted = _PERMIT_RE.sub(_permit_repl, redacted)
 
         fake_map = {}
         for token, real in mapping.items():

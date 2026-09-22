@@ -82,6 +82,19 @@ class TestRedactPii:
         assert len(mapping) == 3
 
 
+class TestHasIdCardSingleSource:
+    """审计冗余项：身份证正则曾两处内联（router:74 / privacy:16），
+    靠注释承诺「保持同一模式」同步——现在 router 委托 privacy，机制防漂移"""
+
+    def test_delegation_and_behavior(self):
+        from ticketpilot.core import router as router_mod
+        from ticketpilot.core.privacy import has_id_card
+
+        assert has_id_card(f"张三{ID_A}")
+        assert not has_id_card("31010119900101123")  # 17 位不算
+        assert router_mod._has_id_card(f"张三{ID_A}")  # 委托生效
+
+
 class TestMaskPiiInText:
     """展示/日志层脱敏：审计项#1 在 mask 侧的缺口"""
 

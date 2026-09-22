@@ -23,6 +23,13 @@ _PHONE_RE = re.compile(r'1[3-9]\d{9}')
 _PERMIT_RE = re.compile(r'(?<![A-Za-z0-9])[HCWSPEDFGhcwspedfg]\d{8}(?!\d)')
 
 
+def has_id_card(text: str) -> bool:
+    """文本是否含 18 位身份证号——路由硬路径的公开入口。
+    审计冗余项：此前 router._has_id_card 内联同一正则，靠注释承诺
+    「保持同一模式」同步；现在正则以本模块为单一来源，防漂移"""
+    return bool(_ID_CARD_RE.search(text))
+
+
 def redact_pii(text: str) -> tuple[str, dict[str, str]]:
     """
     输入最小化：把文本中的身份证/手机号替换为占位符。

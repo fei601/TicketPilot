@@ -22,6 +22,9 @@ logger = logging.getLogger(__name__)
 
 # 从常量文件导入城市列表和艺人列表
 from ticketpilot.data.constants import CITIES, HOT_ARTISTS
+# 身份证正则以 privacy 为单一来源（审计冗余项：此前两处内联同一正则，
+# 靠注释承诺同步——机制保证的承诺才是承诺。privacy 不依赖本模块，无循环导入）
+from ticketpilot.core.privacy import has_id_card
 
 
 class IntentType(str, Enum):
@@ -70,8 +73,9 @@ TYPO_CORRECTIONS = {
 
 
 def _has_id_card(text: str) -> bool:
-    """检查是否包含身份证号（18位）"""
-    return bool(re.search(r'\d{17}[\dXx]', text))
+    """检查是否包含身份证号（18位）——委托 privacy.has_id_card 单一来源。
+    保留本函数名：路由侧调用点（硬特征快路径/_is_order_content）语义不变"""
+    return has_id_card(text)
 
 
 def _is_order_content(text: str) -> bool:
