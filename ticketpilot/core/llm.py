@@ -12,6 +12,15 @@ import config
 # 全局单例客户端
 _client: OpenAI | None = None
 
+# 进程级调用计数器：编排层用「请求前后的差值」统计单次 chat 的 LLM 成本，
+# 不在业务函数间传递计数参数（侵入性为零，测试 monkeypatch 时计数不动也无妨）
+_CALL_COUNT = 0
+
+
+def get_call_count() -> int:
+    """返回本进程累计 LLM 调用次数（观测用）"""
+    return _CALL_COUNT
+
 
 def get_llm_client() -> OpenAI:
     """获取 LLM 客户端实例（单例模式，避免重复创建连接池）"""
@@ -45,6 +54,9 @@ def chat(
     Returns:
         LLM 响应对象（dict），包含 message.content 和可能的 tool_calls
     """
+    global _CALL_COUNT
+    _CALL_COUNT += 1  # 计入尝试：失败的调用同样产生成本与延迟
+
     client = get_llm_client()
 
     kwargs = {

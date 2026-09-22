@@ -65,3 +65,19 @@ class TestBigramScoring:
         """查询 bigram {退票,票大,大麦}，文档命中 2 个 → 2/3"""
         score = self._score("退票大麦", "大麦支持退票")
         assert abs(score - 2 / 3) < 1e-9
+
+
+class TestRetrieveLogging:
+    """检索分数入日志：评测/排障时能回答「这条为什么拒了/为什么答了」"""
+
+    def test_hit_logs_top_score(self, caplog):
+        import logging
+        with caplog.at_level(logging.INFO, logger="ticketpilot.rag.retriever"):
+            retrieve_from_knowledge("强实名")
+        assert "top_score=" in caplog.text
+
+    def test_miss_logs_zero_hits(self, caplog):
+        import logging
+        with caplog.at_level(logging.INFO, logger="ticketpilot.rag.retriever"):
+            retrieve_from_knowledge("zzzqqqxxx 完全不存在的主题 98765")
+        assert "hits=0" in caplog.text

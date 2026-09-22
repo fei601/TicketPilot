@@ -9,9 +9,12 @@ RAG 检索模块（v0.2 硬门控版）
 规则操作真金白银的订单）远高于拒答（用户去问别人）。
 """
 
+import logging
 import re
 
 from ticketpilot.rag.loader import load_knowledge_docs
+
+logger = logging.getLogger(__name__)
 
 # 硬门控阈值：查询 bigram 至少这个比例命中文档才算检索成功（0~1）。
 # 初始值 0.5，D5 评测集落地后用 误拒率/误答率 校准。
@@ -114,7 +117,10 @@ def retrieve_from_knowledge(query: str, top_k: int = 3) -> str:
     results = retriever.retrieve(query, top_k)
 
     if not results:
+        logger.info("[QA] retrieve hits=0（低于阈值，调用方将拒答）")
         return ""
+    # 检索分数入日志：评测/排障时能回答"这条为什么拒了/为什么答了"
+    logger.info(f"[QA] retrieve hits={len(results)} top_score={results[0]['score']:.2f}")
 
     parts = []
     for i, doc in enumerate(results, 1):

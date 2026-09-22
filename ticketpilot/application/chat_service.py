@@ -19,6 +19,7 @@ v0.2：路由输出三域（ORDER 订单域 / AGENT 工具域 / QA 知识域）�
 import json
 import logging
 import re
+import time
 from dataclasses import dataclass, field
 from datetime import timedelta
 
@@ -85,6 +86,9 @@ class ChatService:
             context: 上下文（如最近创建的订单），仅用于 LLM 域分类
             use_llm_router: True 走 LLM 分类（失败自动回退关键词），False 纯规则路径
         """
+        start = time.monotonic()
+        calls_before = llm.get_call_count()
+
         domain = router.classify_domain(user_input, context, use_llm=use_llm_router)
         # 日志也是输出通道：入日志前先脱敏，否则证件号明文躺在日志文件里。
         # 顺序必须是先脱敏后切片：切片可能把 18 位证件号拦腰切断，
@@ -99,14 +103,17 @@ class ChatService:
             result = self._handle_knowledge_qa(user_input)
 
         # 结构化日志：一行机器可读 JSON。评测脚本直接从日志统计
-        # 域分布/拒答率（knowledge_qa_refused 占比）/各 route 计数，
-        # 不需要为观测单独埋点。字段名即口径，改字段=改指标定义。
+        # 域分布/拒答率（knowledge_qa_refused 占比）/各 route 计数/
+        # 单次请求 LLM 成本与延迟，不需要为观测单独埋点。
+        # 字段名即口径，改字段=改指标定义。
         logger.info(json.dumps({
             "event": "chat",
             "domain": domain.value,
             "route": result.route,
             "intent": result.intent,
             "llm_router": use_llm_router,
+            "llm_calls": llm.get_call_count() - calls_before,
+            "latency_ms": int((time.monotonic() - start) * 1000),
             "orders_created": len(result.orders),
             "reply_len": len(result.reply),
         }, ensure_ascii=False))

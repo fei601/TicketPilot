@@ -530,6 +530,32 @@ class TestObservability:
         assert '"domain": "ORDER"' in caplog.text
         assert '"route": "order_parse"' in caplog.text
 
+    def test_chat_log_carries_cost_fields(self, service, monkeypatch, caplog):
+        """结构化行必须携带 llm_calls/latency_ms——
+        D5 评测脚本按日志统计单次请求成本与延迟，字段缺失=指标口径断了"""
+        import logging
+
+        monkeypatch.setattr(
+            service, "_handle_order",
+            lambda t: ChatResult(reply="ok", intent="ORDER_PARSE", route="order_parse"),
+        )
+
+        def boom(*a, **k):
+            raise AssertionError("本测试路径不应发生真实 LLM 调用")
+        monkeypatch.setattr(cs_mod.llm, "chat", boom)
+
+        with caplog.at_level(logging.INFO, logger="ticketpilot.application.chat_service"):
+            # 必须用 18 位证件号输入：硬路径确定性进 ORDER，monkeypatch 才生效。
+            # 若误入 AGENT 路径会真调 LLM——首跑就烧了 2 次真实 API（llm_calls=2 抓包为证）
+            service.chat("张三310101199001011234 上海周杰伦", use_llm_router=False)
+
+        line = next(r.getMessage() for r in caplog.records
+                    if '"event": "chat"' in r.getMessage())
+        payload = json.loads(line)  # 整行必须是合法 JSON（机器可读，不是给人看的文案）
+        assert payload["llm_calls"] == 0   # monkeypatch 路径未走真实 llm.chat
+        assert isinstance(payload["latency_ms"], int)
+        assert payload["llm_calls"] >= 0 and payload["latency_ms"] >= 0
+
 
 # ===========================================
 # 大麦缓存与开抢匹配
